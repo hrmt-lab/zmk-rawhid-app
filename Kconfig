@@ -1,0 +1,34 @@
+config RAWHID_APP
+    bool "RawHID application protocol layer"
+    depends on RAW_HID
+    help
+      Parse host RawHID packets (HELLO / APP_LAYER / TIME_SYNC / AI_USAGE)
+      delivered by zmk-raw-hid via raw_hid_received_event, reply to HELLO,
+      and expose decoded state to other modules through getters.
+
+      This is a generic, keyboard-agnostic layer: a keyboard config only needs
+      to add this module and enable the options below; no per-keyboard C code.
+
+config RAWHID_APP_LAYER_CONTROL
+    bool "Enable RawHID APP_LAYER host layer control"
+    depends on RAW_HID
+    select RAWHID_APP
+    help
+      Handle APP_LAYER (0x30) packets that let a host activate / clear one ZMK
+      layer.
+
+config RAWHID_APP_TIME_SYNC
+    bool "Enable RawHID TIME_SYNC"
+    depends on RAW_HID
+    select RAWHID_APP
+    help
+      Handle TIME_SYNC (0x20) packets and expose formatted local time through
+      rawhid_app_time_sync_format() / rawhid_app_time_sync_wants_seconds().
+
+config RAWHID_APP_AI_USAGE
+    bool "Enable RawHID AI_USAGE"
+    depends on RAW_HID
+    select RAWHID_APP
+    help
+      Handle AI_USAGE (0x10) packets (Codex / Claude Code 5h and 7d usage) and
+      expose the latest per-provider state through rawhid_app_ai_usage_get().

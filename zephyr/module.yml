@@ -1,0 +1,4 @@
+name: rawhid-app
+build:
+  cmake: .
+  kconfig: Kconfig
