@@ -75,7 +75,11 @@ CONFIG_RAWHID_APP_AI_USAGE=y
 #include <rawhid_app/ai_usage.h>
 struct rawhid_app_ai_usage_provider p;     // provider 1=codex, 2=claude_code
 if (rawhid_app_ai_usage_get(2 /* claude */, &p) && p.present) {
-    /* p.flags, p.five_hour_used_bp, p.seven_day_used_bp, ... */
+    /* p.flags, p.five_hour_used_bp, p.seven_day_used_bp,
+       p.five_hour_reset_unix, p.seven_day_reset_unix, p.updated_unix,
+       p.received_uptime_ms (= 受信時 k_uptime_get), p.error_code */
+    /* TIME_SYNC 非依存のリセット残り時間:
+       remaining = reset_unix - updated_unix - (k_uptime_get() - received_uptime_ms)/1000 */
 }
 
 #include <rawhid_app/time_sync.h>

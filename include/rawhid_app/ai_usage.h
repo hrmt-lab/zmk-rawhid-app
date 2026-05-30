@@ -27,6 +27,7 @@ struct rawhid_app_ai_usage_provider {
     uint32_t seven_day_reset_unix;
     uint32_t updated_unix;
     uint8_t error_code;
+    int64_t received_uptime_ms; /* k_uptime_get() when this packet arrived */
 };
 
 #if IS_ENABLED(CONFIG_RAWHID_APP_AI_USAGE)

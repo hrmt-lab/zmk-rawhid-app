@@ -44,6 +44,7 @@ void rawhid_app_ai_usage_handle(const struct rawhid_app_packet *packet) {
         .seven_day_reset_unix = packet->ai_usage.seven_day_reset_unix,
         .updated_unix = packet->ai_usage.updated_unix,
         .error_code = packet->ai_usage.error_code,
+        .received_uptime_ms = k_uptime_get(),
     };
 
     k_mutex_unlock(&providers_lock);
