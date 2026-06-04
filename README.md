@@ -170,6 +170,77 @@ src/
 
 新キーボードに必要なのは west.yml / build.yaml / .conf の設定とキーマップ割当のみで、C コードは不要。
 
+## オリジナルとの違い
+
+以下の機能を追加しています。
+
+### デバイス個体識別（`device_uid_hash` + `capabilities`）
+
+DEVICE_HELLO に `capabilities (u32)` と `device_uid_hash (u64)` を追加しました。
+RawHID-Host が複数デバイスを個別識別し、デバイスごとに異なる設定を適用するために使います。
+
+**変更前の DEVICE_HELLO:**
+```
+byte 0..1  magic "HL"
+byte 2     version 0x01
+byte 3     DEVICE_HELLO (0x02)
+byte 4..6  reserved
+byte 7     seq
+byte 8..31 reserved
+```
+
+**変更後の DEVICE_HELLO:**
+```
+byte 0..1   magic "HL"
+byte 2      version 0x01
+byte 3      DEVICE_HELLO (0x02)
+byte 4      protocol_min = 0x01
+byte 5      protocol_max = 0x01
+byte 6      reserved
+byte 7      seq
+byte 8..11  capabilities  u32 LE
+byte 12..19 device_uid_hash  u64 LE
+byte 20..31 reserved
+```
+
+**追加ファイル:**
+
+- `include/rawhid_app/identity.h` — `rawhid_app_identity_get_uid_hash()` / `rawhid_app_identity_get_capabilities()` の宣言
+- `src/identity.c` — 実装本体
+
+**`device_uid_hash` の生成ロジック:**
+
+```
+1. CONFIG_HWINFO が有効かつ hwinfo_get_device_id() 成功
+   → ハードウェア ID を FNV-1a 64bit hash 化した値を使用
+   → USB ポートを変えても同じ hash になる
+
+2. hwinfo が使えない場合（CONFIG_SETTINGS が有効）
+   → NVS から "raw_hid/identity_seed" (128bit) を読む
+   → 存在しなければ起動時に乱数で生成して保存し、以後同じ値を使用
+
+3. 両方とも無効
+   → device_uid_hash = 0（identity unavailable）
+```
+
+raw なハードウェア ID は Host へ送らず、namespace `"zmk-raw-hid-device-uid-v1"` と seed を
+FNV-1a 64bit でハッシュ化した値のみを送ります。hash 結果が 0 の場合は 1 に補正します。
+
+**`capabilities` の生成ロジック:**
+
+既存の Kconfig から自動生成します。新規 CONFIG は不要です。
+
+| bit | 機能 | 対応 CONFIG |
+|---|---|---|
+| 0 | APP_LAYER | `RAWHID_APP_LAYER_CONTROL` |
+| 1 | TIME_SYNC | `RAWHID_APP_TIME_SYNC` |
+| 2 | AI_USAGE | `RAWHID_APP_AI_USAGE` |
+| 3 | THEME | 未実装（常に 0） |
+
+Host 側はこのビットを見て、未対応デバイスへのパケット送信をスキップできます。
+
+---
+
 ## ライセンス
 
 MIT License

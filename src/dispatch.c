@@ -9,6 +9,7 @@
 #include <zephyr/sys/byteorder.h>
 #include <zephyr/sys/util.h>
 
+#include <rawhid_app/identity.h>
 #include <rawhid_app/packet.h>
 
 #define RAWHID_APP_MAGIC_0 'H'
@@ -20,11 +21,20 @@
 #define RAWHID_APP_OFFSET_VERSION 2
 #define RAWHID_APP_OFFSET_TYPE 3
 
-/* HELLO (host/device): reserved 4..6, seq at 7, reserved 8..31. */
+/* HOST_HELLO (incoming): reserved 4..6, seq at 7, reserved 8..31. */
 #define RAWHID_APP_HELLO_RESERVED_A_START 4
 #define RAWHID_APP_HELLO_RESERVED_A_END 6
 #define RAWHID_APP_HELLO_SEQ 7
 #define RAWHID_APP_HELLO_RESERVED_B_START 8
+
+/* DEVICE_HELLO (outgoing) extension fields. */
+#define RAWHID_APP_HELLO_PROTOCOL_MIN    4  /* u8 */
+#define RAWHID_APP_HELLO_PROTOCOL_MAX    5  /* u8 */
+/* byte 6: reserved = 0 */
+/* byte 7: seq (RAWHID_APP_HELLO_SEQ) */
+#define RAWHID_APP_HELLO_CAPABILITIES   8   /* u32 LE */
+#define RAWHID_APP_HELLO_DEVICE_UID_HASH 12 /* u64 LE */
+/* bytes 20..31: reserved = 0 */
 
 /* APP_LAYER: action at 4, layer at 5, reserved 6, seq 7, reserved 8..31. */
 #define RAWHID_APP_APP_LAYER_ACTION 4
@@ -224,8 +234,16 @@ static void send_device_hello(uint8_t seq) {
     hello_response[RAWHID_APP_OFFSET_MAGIC_0] = RAWHID_APP_MAGIC_0;
     hello_response[RAWHID_APP_OFFSET_MAGIC_1] = RAWHID_APP_MAGIC_1;
     hello_response[RAWHID_APP_OFFSET_VERSION] = RAWHID_APP_VERSION;
-    hello_response[RAWHID_APP_OFFSET_TYPE] = RAWHID_APP_PACKET_DEVICE_HELLO;
+    hello_response[RAWHID_APP_OFFSET_TYPE]    = RAWHID_APP_PACKET_DEVICE_HELLO;
+    hello_response[RAWHID_APP_HELLO_PROTOCOL_MIN] = 0x01;
+    hello_response[RAWHID_APP_HELLO_PROTOCOL_MAX] = 0x01;
+    /* byte 6: reserved = 0 (covered by memset) */
     hello_response[RAWHID_APP_HELLO_SEQ] = seq;
+    sys_put_le32(rawhid_app_identity_get_capabilities(),
+                 &hello_response[RAWHID_APP_HELLO_CAPABILITIES]);
+    sys_put_le64(rawhid_app_identity_get_uid_hash(),
+                 &hello_response[RAWHID_APP_HELLO_DEVICE_UID_HASH]);
+    /* bytes 20..31: reserved = 0 (covered by memset) */
 
     raise_raw_hid_sent_event((struct raw_hid_sent_event){
         .data = hello_response,
