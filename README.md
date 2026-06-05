@@ -66,30 +66,126 @@ CONFIG_RAWHID_APP_AI_USAGE=y
 
 ---
 
-## getter（表示側から利用）
+## 各機能の使い方
 
 ヘッダはモジュールの `include/` にあり、ビルドに含めれば `<rawhid_app/...>` で参照できます。
 いずれも `#else` の inline スタブ付きで、CONFIG 無効時でも include 側はビルド可能です。
 
-```c
-#include <rawhid_app/ai_usage.h>
-struct rawhid_app_ai_usage_provider p;     // provider 1=codex, 2=claude_code
-if (rawhid_app_ai_usage_get(2 /* claude */, &p) && p.present) {
-    /* p.flags, p.five_hour_used_bp, p.seven_day_used_bp,
-       p.five_hour_reset_unix, p.seven_day_reset_unix, p.updated_unix,
-       p.received_uptime_ms (= 受信時 k_uptime_get), p.error_code */
-    /* TIME_SYNC 非依存のリセット残り時間:
-       remaining = reset_unix - updated_unix - (k_uptime_get() - received_uptime_ms)/1000 */
-}
+### レイヤー制御（APP_LAYER）
 
-#include <rawhid_app/time_sync.h>
-char buf[24];
-if (rawhid_app_time_sync_format(buf, sizeof(buf))) { /* 現在時刻文字列 */ }
-bool fast = rawhid_app_time_sync_wants_seconds();  // 秒表示なら更新間隔を短く
+`.conf` に追加:
+
+```ini
+CONFIG_RAWHID_APP_LAYER_CONTROL=y
 ```
 
-Prospector の AI Usage 画面はこの getter を `#if IS_ENABLED(CONFIG_RAWHID_APP_AI_USAGE)`
-ガードで呼び出します。
+キーマップやCコードの変更は不要です。ホストが `APP_LAYER` パケットを送ると、キーボード側で
+`zmk_keymap_layer_activate()` / `zmk_keymap_layer_deactivate()` が自動的に呼ばれます。
+
+- **SET**: 指定レイヤーを有効化。前にホストが有効化したレイヤーは自動解除されます。
+- **CLEAR**: ホストが有効化したレイヤーのみ解除。手動で有効化したレイヤーは触りません。
+
+ホストが管理するのは常に1枚です。ホスト送信のレイヤー番号（0〜31）に対応するレイヤーをキーマップに定義しておくだけで動作します。
+
+### 時刻表示（TIME_SYNC）
+
+`.conf` に追加:
+
+```ini
+CONFIG_RAWHID_APP_TIME_SYNC=y
+```
+
+ホストが `TIME_SYNC` パケットを送った時点の `unix_time_sec + tz_offset_min` と `k_uptime_get()`
+を基準に、その後はキーボード単体で時刻を進め続けます。RawHID が切断されても時刻は動き続けます。
+
+ディスプレイ描画コードから getter を呼び出します:
+
+```c
+#include <rawhid_app/time_sync.h>
+
+char buf[24];
+if (rawhid_app_time_sync_format(buf, sizeof(buf))) {
+    // buf に時刻文字列が入っている → 画面に描画
+} else {
+    // まだ TIME_SYNC を受信していない → "--:--" など表示
+}
+
+// 秒表示フォーマット（HMS）のときは毎秒更新、それ以外は毎分更新で十分
+bool needs_fast_refresh = rawhid_app_time_sync_wants_seconds();
+```
+
+出力フォーマットはホスト側の `format_hint` / `clock_mode` に従って自動で切り替わります:
+
+| フォーマット | 出力例 |
+|---|---|
+| HM（デフォルト） | `14:30` |
+| HMS | `14:30:05` |
+| Y-M-D | `2026-06-06` |
+| M-D | `06-06` |
+| datetime | `2026-06-06 14:30` |
+| weekday+HM | `Fri 14:30` |
+
+### AI 使用率表示（AI_USAGE）
+
+`.conf` に追加:
+
+```ini
+CONFIG_RAWHID_APP_AI_USAGE=y
+```
+
+ホストが `AI_USAGE` パケットを送るたびに、プロバイダー（Codex / Claude Code）ごとに最新状態を
+上書き保存します。getter はスレッドセーフにコピーを返します。
+
+ディスプレイ描画コードから getter を呼び出します:
+
+```c
+#include <rawhid_app/ai_usage.h>
+
+struct rawhid_app_ai_usage_provider p;
+
+// provider: 1=Codex, 2=Claude Code
+if (rawhid_app_ai_usage_get(2 /* claude_code */, &p) && p.present) {
+
+    // 使用率は basis points（10000 = 100.00%）
+    uint16_t pct_5h = p.five_hour_used_bp;   // 5時間枠の使用率
+    uint16_t pct_7d = p.seven_day_used_bp;   // 7日枠の使用率
+
+    // リセットまでの残り秒数（TIME_SYNC 不要）
+    int64_t elapsed_sec = (k_uptime_get() - p.received_uptime_ms) / 1000;
+    int64_t remaining_5h = (int64_t)p.five_hour_reset_unix - (int64_t)p.updated_unix - elapsed_sec;
+    int64_t remaining_7d = (int64_t)p.seven_day_reset_unix - (int64_t)p.updated_unix - elapsed_sec;
+
+    // エラーチェック
+    if (p.flags & RAWHID_APP_AI_USAGE_FLAG_ERROR_PRESENT) {
+        // p.error_code を見てエラー表示
+    }
+}
+```
+
+主要な `flags` ビット:
+
+| フラグ | 意味 |
+|---|---|
+| `RAWHID_APP_AI_USAGE_FLAG_FIVE_HOUR_VALID` (bit0) | 5時間使用率が有効 |
+| `RAWHID_APP_AI_USAGE_FLAG_SEVEN_DAY_VALID` (bit1) | 7日使用率が有効 |
+| `RAWHID_APP_AI_USAGE_FLAG_ESTIMATED` (bit2) | 推定値（精度低め） |
+| `RAWHID_APP_AI_USAGE_FLAG_STALE` (bit5) | データが古い |
+| `RAWHID_APP_AI_USAGE_FLAG_ERROR_PRESENT` (bit7) | `error_code` を確認 |
+
+### CONFIG ガードについて
+
+3機能ともヘッダに `#else` スタブが入っているため、ディスプレイ側コードは
+`#if IS_ENABLED(...)` ガードだけ書けばビルドが常に通ります:
+
+```c
+#if IS_ENABLED(CONFIG_RAWHID_APP_TIME_SYNC)
+    // 時刻表示の処理
+#endif
+
+#if IS_ENABLED(CONFIG_RAWHID_APP_AI_USAGE)
+    // AI 使用率表示の処理
+#endif
+```
 
 ---
 
