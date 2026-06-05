@@ -170,26 +170,12 @@ src/
 
 新キーボードに必要なのは west.yml / build.yaml / .conf の設定とキーマップ割当のみで、C コードは不要。
 
-## オリジナルとの違い
+## デバイス個体識別（`device_uid_hash` + `capabilities`）
 
-以下の機能を追加しています。
-
-### デバイス個体識別（`device_uid_hash` + `capabilities`）
-
-DEVICE_HELLO に `capabilities (u32)` と `device_uid_hash (u64)` を追加しました。
+DEVICE_HELLO は `capabilities (u32)` と `device_uid_hash (u64)` を持ちます。
 RawHID-Host が複数デバイスを個別識別し、デバイスごとに異なる設定を適用するために使います。
 
-**変更前の DEVICE_HELLO:**
-```
-byte 0..1  magic "HL"
-byte 2     version 0x01
-byte 3     DEVICE_HELLO (0x02)
-byte 4..6  reserved
-byte 7     seq
-byte 8..31 reserved
-```
-
-**変更後の DEVICE_HELLO:**
+**DEVICE_HELLO のフォーマット:**
 ```
 byte 0..1   magic "HL"
 byte 2      version 0x01
@@ -203,7 +189,7 @@ byte 12..19 device_uid_hash  u64 LE
 byte 20..31 reserved
 ```
 
-**追加ファイル:**
+**関連ファイル:**
 
 - `include/rawhid_app/identity.h` — `rawhid_app_identity_get_uid_hash()` / `rawhid_app_identity_get_capabilities()` の宣言
 - `src/identity.c` — 実装本体
