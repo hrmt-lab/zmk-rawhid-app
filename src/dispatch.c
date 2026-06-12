@@ -9,17 +9,9 @@
 #include <zephyr/sys/byteorder.h>
 #include <zephyr/sys/util.h>
 
-#include <rawhid_app/identity.h>
 #include <rawhid_app/packet.h>
-
-#define RAWHID_APP_MAGIC_0 'H'
-#define RAWHID_APP_MAGIC_1 'L'
-#define RAWHID_APP_VERSION 0x01
-
-#define RAWHID_APP_OFFSET_MAGIC_0 0
-#define RAWHID_APP_OFFSET_MAGIC_1 1
-#define RAWHID_APP_OFFSET_VERSION 2
-#define RAWHID_APP_OFFSET_TYPE 3
+#include <rawhid_app/identity.h>
+#include <rawhid_app/uplink.h>
 
 /* HOST_HELLO (incoming): reserved 4..6, seq at 7, reserved 8..31. */
 #define RAWHID_APP_HELLO_RESERVED_A_START 4
@@ -87,6 +79,10 @@ static bool packet_type_is_known(uint8_t packet_type) {
     case RAWHID_APP_PACKET_AI_USAGE:
     case RAWHID_APP_PACKET_TIME_SYNC:
     case RAWHID_APP_PACKET_APP_LAYER:
+    case RAWHID_APP_PACKET_BATTERY_STATUS:
+    case RAWHID_APP_PACKET_HOST_ACTION:
+    case RAWHID_APP_PACKET_KEY_STATS:
+    case RAWHID_APP_PACKET_LAYER_STATE:
         return true;
     default:
         return false;
@@ -262,6 +258,7 @@ static int rawhid_app_received_listener(const zmk_event_t *eh) {
     switch (packet.type) {
     case RAWHID_APP_PACKET_HOST_HELLO:
         send_device_hello(packet.hello.seq);
+        rawhid_app_uplink_schedule_initial_push();
         break;
     case RAWHID_APP_PACKET_APP_LAYER:
 #if IS_ENABLED(CONFIG_RAWHID_APP_LAYER_CONTROL)

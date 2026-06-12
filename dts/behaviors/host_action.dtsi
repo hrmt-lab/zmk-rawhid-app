@@ -1,0 +1,8 @@
+/ {
+    behaviors {
+        host_action: host_action {
+            compatible = "zmk,behavior-host-action";
+            #binding-cells = <2>;
+        };
+    };
+};

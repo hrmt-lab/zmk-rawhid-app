@@ -147,6 +147,18 @@ uint32_t rawhid_app_identity_get_capabilities(void) {
         caps |= BIT(2);
     }
     /* bit 3 (THEME): no CONFIG yet, always 0 */
+    if (IS_ENABLED(CONFIG_RAWHID_APP_BATTERY_REPORT)) {
+        caps |= BIT(4);
+    }
+    if (IS_ENABLED(CONFIG_RAWHID_APP_HOST_ACTION)) {
+        caps |= BIT(5);
+    }
+    if (IS_ENABLED(CONFIG_RAWHID_APP_KEY_STATS)) {
+        caps |= BIT(6);
+    }
+    if (IS_ENABLED(CONFIG_RAWHID_APP_LAYER_STATE_REPORT)) {
+        caps |= BIT(7);
+    }
 
     return caps;
 }

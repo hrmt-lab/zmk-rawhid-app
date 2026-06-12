@@ -32,3 +32,35 @@ config RAWHID_APP_AI_USAGE
     help
       Handle AI_USAGE (0x10) packets (Codex / Claude Code 5h and 7d usage) and
       expose the latest per-provider state through rawhid_app_ai_usage_get().
+
+config RAWHID_APP_BATTERY_REPORT
+    bool "Enable RawHID BATTERY_STATUS uplink"
+    depends on RAW_HID
+    select RAWHID_APP
+    help
+      Send split peripheral battery levels to the host. Source IDs are reported
+      as 1-based peripheral slots; level 0xff means disconnected or unknown.
+
+config RAWHID_APP_HOST_ACTION
+    bool "Enable RawHID HOST_ACTION behavior uplink"
+    depends on RAW_HID
+    select RAWHID_APP
+    help
+      Enable the &host_action behavior to send action ID/value pairs to the host.
+
+config RAWHID_APP_KEY_STATS
+    bool "Enable RawHID KEY_STATS uplink"
+    depends on RAW_HID
+    select RAWHID_APP
+    help
+      Count key presses in a uint16_t array sized by ZMK_KEYMAP_LEN and
+      periodically send deltas to the host. This is opt-in because it consumes
+      RAM proportional to the physical key count.
+
+config RAWHID_APP_LAYER_STATE_REPORT
+    bool "Enable RawHID LAYER_STATE uplink"
+    depends on RAW_HID
+    select RAWHID_APP
+    help
+      Send the current highest active layer and layer-state mask to the host
+      after layer changes and after HOST_HELLO.

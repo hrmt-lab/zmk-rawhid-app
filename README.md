@@ -49,6 +49,11 @@ CONFIG_RAWHID_APP=y
 CONFIG_RAWHID_APP_LAYER_CONTROL=y
 CONFIG_RAWHID_APP_TIME_SYNC=y
 CONFIG_RAWHID_APP_AI_USAGE=y
+# Optional device -> host uplinks.
+CONFIG_RAWHID_APP_LAYER_STATE_REPORT=y
+CONFIG_RAWHID_APP_BATTERY_REPORT=y
+CONFIG_RAWHID_APP_HOST_ACTION=y
+CONFIG_RAWHID_APP_KEY_STATS=y
 ```
 
 `CONFIG_RAWHID_APP` 単体で HELLO 応答が有効になり、各サブ機能を個別に足せます。
@@ -63,6 +68,10 @@ CONFIG_RAWHID_APP_AI_USAGE=y
 | `RAWHID_APP_LAYER_CONTROL` | APP_LAYER（ホストからのレイヤー制御） |
 | `RAWHID_APP_TIME_SYNC` | TIME_SYNC（時刻同期＋getter） |
 | `RAWHID_APP_AI_USAGE` | AI_USAGE（使用率保持＋getter） |
+| `RAWHID_APP_LAYER_STATE_REPORT` | LAYER_STATE uplink（現在レイヤーと mask） |
+| `RAWHID_APP_BATTERY_REPORT` | BATTERY_STATUS uplink（左右ペリフェラル残量） |
+| `RAWHID_APP_HOST_ACTION` | HOST_ACTION uplink（`&host_action <id> <value>`） |
+| `RAWHID_APP_KEY_STATS` | KEY_STATS uplink（`uint16_t * ZMK_KEYMAP_LEN` の RAM を使用） |
 
 ---
 
@@ -70,6 +79,23 @@ CONFIG_RAWHID_APP_AI_USAGE=y
 
 ヘッダはモジュールの `include/` にあり、ビルドに含めれば `<rawhid_app/...>` で参照できます。
 いずれも `#else` の inline スタブ付きで、CONFIG 無効時でも include 側はビルド可能です。
+
+### Host action uplink
+
+keymap に behavior node を追加:
+
+```dts
+#include <behaviors/host_action.dtsi>
+```
+
+`.conf` に追加:
+
+```ini
+CONFIG_RAWHID_APP_HOST_ACTION=y
+```
+
+keymap では `&host_action <action_id> <value>` を使います。split peripheral 側では
+`RAWHID_APP_HOST_ACTION=n` のため送信せず no-op になります。
 
 ### レイヤー制御（APP_LAYER）
 
@@ -310,7 +336,7 @@ FNV-1a 64bit でハッシュ化した値のみを送ります。hash 結果が 0
 
 **`capabilities` の生成ロジック:**
 
-既存の Kconfig から自動生成します。新規 CONFIG は不要です。
+既存の Kconfig から自動生成します。
 
 | bit | 機能 | 対応 CONFIG |
 |---|---|---|
@@ -318,6 +344,10 @@ FNV-1a 64bit でハッシュ化した値のみを送ります。hash 結果が 0
 | 1 | TIME_SYNC | `RAWHID_APP_TIME_SYNC` |
 | 2 | AI_USAGE | `RAWHID_APP_AI_USAGE` |
 | 3 | THEME | 未実装（常に 0） |
+| 4 | BATTERY_STATUS | `RAWHID_APP_BATTERY_REPORT` |
+| 5 | HOST_ACTION | `RAWHID_APP_HOST_ACTION` |
+| 6 | KEY_STATS | `RAWHID_APP_KEY_STATS` |
+| 7 | LAYER_STATE | `RAWHID_APP_LAYER_STATE_REPORT` |
 
 Host 側はこのビットを見て、未対応デバイスへのパケット送信をスキップできます。
 

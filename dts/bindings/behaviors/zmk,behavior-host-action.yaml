@@ -1,0 +1,5 @@
+description: RawHID host action behavior
+
+compatible: "zmk,behavior-host-action"
+
+include: two_param.yaml
