@@ -11,7 +11,17 @@
 
 を行い、解析結果を getter で他モジュール（例: Prospector ディスプレイ）へ公開します。
 
+さらに、デバイス → ホストの **uplink**（device-initiated packet）として
+
+- **BATTERY_STATUS**: 本体 / 左右ペリフェラルのバッテリー残量
+- **HOST_ACTION**: キーから PC 側操作をトリガーする（`&host_action` behavior）
+- **KEY_STATS**: キー位置ごとの打鍵数（キーの内容は送らない）
+- **LAYER_STATE**: 現在の最上位レイヤーと layer mask（表示用）
+
+を送信できます。いずれも `DEVICE_HELLO` の capability bit で個別に有効化されます。
+
 キーボード固有コードは不要で、**モジュール追加 + CONFIG 有効化だけ**で組み込めます。
+（uplink を使う場合のみ、`HOST_ACTION` の keymap binding と各機能の `.conf` 追加が必要です。）
 
 ---
 
@@ -96,6 +106,73 @@ CONFIG_RAWHID_APP_HOST_ACTION=y
 
 keymap では `&host_action <action_id> <value>` を使います。split peripheral 側では
 `RAWHID_APP_HOST_ACTION=n` のため送信せず no-op になります。
+
+keymap 例（任意のレイヤーのキーに割り当てる）:
+
+```dts
+#include <behaviors/host_action.dtsi>
+
+/ {
+    keymap {
+        compatible = "zmk,keymap";
+
+        my_layer {
+            bindings = <
+                // action_id = 1, value = 0 を host へ送る
+                &host_action 1 0
+                // action_id = 2, value = 5（value は host 側で解釈）
+                &host_action 2 5
+            >;
+        };
+    };
+};
+```
+
+`action_id` の意味（ウィンドウ表示・監視停止・アプリ起動など）は**ホスト側 config の許可リスト**で
+デバイス単位に定義します。firmware は `action_id` / `value` をそのまま送るだけで、意味づけはしません。
+ここで決めた `action_id` を、RawHID Host アプリの **「アクション」画面**（`docs/manual-app-usage.md` の
+「アクション」セクション）で同じ番号に対して動作を割り当ててください。両側の `action_id` が一致して
+初めて動作します。
+
+### バッテリー残量（BATTERY_STATUS uplink）
+
+`.conf` に追加:
+
+```ini
+CONFIG_RAWHID_APP_BATTERY_REPORT=y
+```
+
+ZMK のバッテリーイベントを購読し、本体 / 左 / 右の残量を送信します。残量変化時に加えて約5分周期でも送り、
+split 切断時は `0xFF`（unknown / disconnected）を送ります。キーマップやCコードの追加は不要です。
+
+### キー統計（KEY_STATS uplink）
+
+`.conf` に追加:
+
+```ini
+CONFIG_RAWHID_APP_KEY_STATS=y
+```
+
+`position_state_changed` を購読してキー位置ごとの押下回数を数え、約45秒周期で**非ゼロの位置だけ**を
+送信して 0 にクリアします。送るのは「位置と回数」だけで、キーの内容（何を入力したか）は送りません。
+`uint16_t * ZMK_KEYMAP_LEN` の RAM を使うため、RAM に余裕がない構成では有効化前に使用量を確認してください。
+
+### レイヤー逆同期（LAYER_STATE uplink）
+
+`.conf` に追加:
+
+```ini
+CONFIG_RAWHID_APP_LAYER_STATE_REPORT=y
+```
+
+`layer_state_changed` を購読し、最上位アクティブレイヤーと layer mask をホストへ送ります（約50ms デバウンス）。
+ホストはこれを**表示専用**に使い、APP_LAYER としてエコーバックしません。キーマップやCコードの追加は不要です。
+
+### uplink 共通の挙動
+
+- `HOST_HELLO` 受信後、約150ms 遅延して LAYER_STATE / BATTERY_STATUS の初期状態を push します
+  （capability 登録前に送って host に捨てられるのを避けるため）。
+- uplink は best-effort です。host が読んでいない間（監視停止中など）の packet は失われます。
 
 ### レイヤー制御（APP_LAYER）
 
@@ -236,6 +313,13 @@ RawHID レポートは **32 byte 固定**。リトルエンディアン。
 | `0x10` | AI_USAGE | H→D |
 | `0x20` | TIME_SYNC | H→D |
 | `0x30` | APP_LAYER | H→D |
+| `0x40` | BATTERY_STATUS | D→H |
+| `0x50` | HOST_ACTION | D→H |
+| `0x60` | KEY_STATS | D→H |
+| `0x70` | LAYER_STATE | D→H |
+
+`0x40` 以降は device → host の uplink です。送信するには対応する capability bit を `DEVICE_HELLO` で
+立てます（host は bit が立っていない type を破棄します）。
 
 検証（`src/dispatch.c`）: magic / version / 既知 type / length==32 / 各 reserved バイトが 0。
 
@@ -268,6 +352,29 @@ error_code: `0` none / `1` source_disabled / `2` missing_credentials / `3` expir
 `4` auth_failed / `5` rate_limited / `6` fetch_failed / `7` parse_failed / `8` no_usage_data /
 `9` missing_limit。
 
+### BATTERY_STATUS (`0x40`, D→H)
+
+`4` count(1..4) / `5+2i` source[i](0=self,1=left,2=right,3=aux) / `6+2i` level[i](0..100, `0xFF`=unknown) /
+以降 reserved。**seq は持ちません**（byte7 は entry 領域）。`src/battery_report.c`。
+
+### HOST_ACTION (`0x50`, D→H)
+
+`4` action_id / `5` value / `6` reserved / `7` seq / `8..31` reserved。host は同一 seq の連続受信を
+1回として扱います（二重送信対策）。`action_id` / `value` の意味は host 側 config が定義します。
+`src/behaviors/behavior_host_action.c`。
+
+### KEY_STATS (`0x60`, D→H)
+
+`4` entry_count(1..8) / `5` flags(bit0=MORE_FOLLOWS) / `6` reserved / `7` seq /
+`8+3i` position[i] / `9+3i..10+3i` delta[i](u16 LE, 0 は送らない) / 以降 reserved。
+非ゼロ位置のみを定期送信し 0 クリア。8 件超は複数 packet に分割し最後以外に MORE_FOLLOWS を立てます。
+`src/key_stats.c`。
+
+### LAYER_STATE (`0x70`, D→H)
+
+`4` active_layer(0..31) / `5..6` reserved / `7` seq / `8..11` layer_mask(u32 LE, bit i = layer i active) /
+`12..31` reserved。host は表示専用に使います。`src/layer_state_report.c`。
+
 ---
 
 ## 実装構造（移植の参考）
@@ -277,11 +384,23 @@ include/rawhid_app/
   packet.h      … パケット型/構造体/enum、ハンドラ宣言
   time_sync.h   … getter + #else スタブ
   ai_usage.h    … flags/struct/getter + #else スタブ
+  identity.h    … device_uid_hash / capabilities の getter 宣言
+  uplink.h      … uplink 共通 helper（prepare/seq/send/初期push）の宣言
 src/
   dispatch.c    … raw_hid_received_event 購読・検証・分岐・HELLO応答
   layer_control.c
   time_sync.c
   ai_usage.c
+  identity.c            … device_uid_hash / capabilities 生成
+  uplink.c              … uplink 共通 helper・HELLO後の初期 push
+  battery_report.c      … BATTERY_STATUS uplink
+  key_stats.c           … KEY_STATS uplink
+  layer_state_report.c  … LAYER_STATE uplink
+  behaviors/
+    behavior_host_action.c … &host_action behavior + HOST_ACTION uplink
+dts/
+  behaviors/host_action.dtsi             … &host_action node
+  bindings/behaviors/zmk,behavior-host-action.yaml
 ```
 
 ポイント:
