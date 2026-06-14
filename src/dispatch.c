@@ -83,6 +83,7 @@ static bool packet_type_is_known(uint8_t packet_type) {
     case RAWHID_APP_PACKET_HOST_ACTION:
     case RAWHID_APP_PACKET_KEY_STATS:
     case RAWHID_APP_PACKET_LAYER_STATE:
+    case RAWHID_APP_PACKET_KEY_PRESS:
         return true;
     default:
         return false;

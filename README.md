@@ -64,6 +64,7 @@ CONFIG_RAWHID_APP_LAYER_STATE_REPORT=y
 CONFIG_RAWHID_APP_BATTERY_REPORT=y
 CONFIG_RAWHID_APP_HOST_ACTION=y
 CONFIG_RAWHID_APP_KEY_STATS=y
+CONFIG_RAWHID_APP_KEY_PRESS=y
 ```
 
 `CONFIG_RAWHID_APP` 単体で HELLO 応答が有効になり、各サブ機能を個別に足せます。
@@ -82,6 +83,7 @@ CONFIG_RAWHID_APP_KEY_STATS=y
 | `RAWHID_APP_BATTERY_REPORT` | BATTERY_STATUS uplink（左右ペリフェラル残量） |
 | `RAWHID_APP_HOST_ACTION` | HOST_ACTION uplink（`&host_action <id> <value>`） |
 | `RAWHID_APP_KEY_STATS` | KEY_STATS uplink（`uint16_t * ZMK_KEYMAP_LEN` の RAM を使用） |
+| `RAWHID_APP_KEY_PRESS` | KEY_PRESS uplink（押下/離上イベントを即時送信） |
 
 ---
 
@@ -317,6 +319,7 @@ RawHID レポートは **32 byte 固定**。リトルエンディアン。
 | `0x50` | HOST_ACTION | D→H |
 | `0x60` | KEY_STATS | D→H |
 | `0x70` | LAYER_STATE | D→H |
+| `0x80` | KEY_PRESS | D→H |
 
 `0x40` 以降は device → host の uplink です。送信するには対応する capability bit を `DEVICE_HELLO` で
 立てます（host は bit が立っていない type を破棄します）。
@@ -374,6 +377,14 @@ error_code: `0` none / `1` source_disabled / `2` missing_credentials / `3` expir
 
 `4` active_layer(0..31) / `5..6` reserved / `7` seq / `8..11` layer_mask(u32 LE, bit i = layer i active) /
 `12..31` reserved。host は表示専用に使います。`src/layer_state_report.c`。
+
+### KEY_PRESS (`0x80`, D→H)
+
+`4` position(u8) / `5` flags / `6` reserved / `7` seq / `8..31` reserved。
+
+flags bit0 が `1` のとき押下、`0` のとき離上です。`CONFIG_RAWHID_APP_KEY_PRESS=y` の間は
+`zmk_position_state_changed` ごとに press/release を即時送信します。監視停止中や host 未接続時の送信は
+既存 uplink と同じ RawHID 送信ブロックの影響を受ける可能性があります。
 
 ---
 
@@ -467,6 +478,7 @@ FNV-1a 64bit でハッシュ化した値のみを送ります。hash 結果が 0
 | 5 | HOST_ACTION | `RAWHID_APP_HOST_ACTION` |
 | 6 | KEY_STATS | `RAWHID_APP_KEY_STATS` |
 | 7 | LAYER_STATE | `RAWHID_APP_LAYER_STATE_REPORT` |
+| 8 | KEY_PRESS | `RAWHID_APP_KEY_PRESS` |
 
 Host 側はこのビットを見て、未対応デバイスへのパケット送信をスキップできます。
 

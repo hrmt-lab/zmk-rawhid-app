@@ -159,6 +159,9 @@ uint32_t rawhid_app_identity_get_capabilities(void) {
     if (IS_ENABLED(CONFIG_RAWHID_APP_LAYER_STATE_REPORT)) {
         caps |= BIT(7);
     }
+    if (IS_ENABLED(CONFIG_RAWHID_APP_KEY_PRESS)) {
+        caps |= BIT(8);
+    }
 
     return caps;
 }

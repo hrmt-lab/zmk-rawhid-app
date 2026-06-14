@@ -17,6 +17,7 @@ LOG_MODULE_DECLARE(zmk, CONFIG_ZMK_LOG_LEVEL);
 static uint8_t host_action_seq;
 static uint8_t key_stats_seq;
 static uint8_t layer_state_seq;
+static uint8_t key_press_seq;
 
 static void initial_push_work_handler(struct k_work *work);
 static K_WORK_DELAYABLE_DEFINE(initial_push_work, initial_push_work_handler);
@@ -37,6 +38,8 @@ uint8_t rawhid_app_uplink_next_seq(enum rawhid_app_packet_type type) {
         return key_stats_seq++;
     case RAWHID_APP_PACKET_LAYER_STATE:
         return layer_state_seq++;
+    case RAWHID_APP_PACKET_KEY_PRESS:
+        return key_press_seq++;
     default:
         return 0;
     }

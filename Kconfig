@@ -57,6 +57,13 @@ config RAWHID_APP_KEY_STATS
       periodically send deltas to the host. This is opt-in because it consumes
       RAM proportional to the physical key count.
 
+config RAWHID_APP_KEY_PRESS
+    bool "Enable RawHID KEY_PRESS uplink"
+    depends on RAW_HID
+    select RAWHID_APP
+    help
+      Send each key press and release event to the host immediately.
+
 config RAWHID_APP_LAYER_STATE_REPORT
     bool "Enable RawHID LAYER_STATE uplink"
     depends on RAW_HID

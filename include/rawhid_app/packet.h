@@ -25,6 +25,7 @@ enum rawhid_app_packet_type {
     RAWHID_APP_PACKET_HOST_ACTION = 0x50,
     RAWHID_APP_PACKET_KEY_STATS = 0x60,
     RAWHID_APP_PACKET_LAYER_STATE = 0x70,
+    RAWHID_APP_PACKET_KEY_PRESS = 0x80,
 };
 
 enum rawhid_app_app_layer_action {
