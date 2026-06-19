@@ -28,6 +28,9 @@ LOG_MODULE_DECLARE(zmk, CONFIG_ZMK_LOG_LEVEL);
 
 static uint8_t levels[BATTERY_SOURCE_COUNT] = {BATTERY_LEVEL_DISCONNECTED,
                                                BATTERY_LEVEL_DISCONNECTED};
+#if RAWHID_APP_HAS_SPLIT_CENTRAL_STATUS
+static bool connected[BATTERY_SOURCE_COUNT] = {false, false};
+#endif
 
 static void battery_periodic_work_handler(struct k_work *work);
 static K_WORK_DELAYABLE_DEFINE(battery_periodic_work, battery_periodic_work_handler);
@@ -90,6 +93,13 @@ static int battery_listener(const zmk_event_t *eh) {
     }
 
     uint8_t level = MIN(ev->state_of_charge, 100);
+#if RAWHID_APP_HAS_SPLIT_CENTRAL_STATUS
+    if (!connected[ev->source] && level == 0) {
+        level = BATTERY_LEVEL_DISCONNECTED;
+    } else if (level > 0) {
+        connected[ev->source] = true;
+    }
+#endif
 
     if (levels[ev->source] != level) {
         levels[ev->source] = level;
@@ -107,11 +117,13 @@ ZMK_SUBSCRIPTION(rawhid_app_battery_report, zmk_peripheral_battery_state_changed
 static int battery_connection_listener(const zmk_event_t *eh) {
     const struct zmk_split_central_status_changed *ev = as_zmk_split_central_status_changed(eh);
 
-    if (ev == NULL || ev->slot >= BATTERY_SOURCE_COUNT || ev->connected) {
+    if (ev == NULL || ev->slot >= BATTERY_SOURCE_COUNT) {
         return ZMK_EV_EVENT_BUBBLE;
     }
 
-    if (levels[ev->slot] != BATTERY_LEVEL_DISCONNECTED) {
+    connected[ev->slot] = ev->connected;
+
+    if (!ev->connected && levels[ev->slot] != BATTERY_LEVEL_DISCONNECTED) {
         levels[ev->slot] = BATTERY_LEVEL_DISCONNECTED;
         send_source(ev->slot);
     }
