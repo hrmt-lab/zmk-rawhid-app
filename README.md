@@ -147,6 +147,11 @@ CONFIG_RAWHID_APP_BATTERY_REPORT=y
 ZMK のバッテリーイベントを購読し、本体 / 左 / 右の残量を送信します。残量変化時に加えて約5分周期でも送り、
 split 切断時は `0xFF`（unknown / disconnected）を送ります。キーマップやCコードの追加は不要です。
 
+左右ペリフェラルが未接続または電源OFFの間は、firmware 側の `levels[]` は `0xFF` のままです。この場合
+RawHID Host では `--%` や `?` と表示されます。これは packet が届いていない状態ではなく、
+`BATTERY_STATUS` の level が unknown であることを示します。左右ペリフェラルが接続され、
+`zmk_peripheral_battery_state_changed` が発火すると `0..100` の実残量が送信されます。
+
 ### キー統計（KEY_STATS uplink）
 
 `.conf` に追加:
@@ -175,6 +180,9 @@ CONFIG_RAWHID_APP_LAYER_STATE_REPORT=y
 - `HOST_HELLO` 受信後、約150ms 遅延して LAYER_STATE / BATTERY_STATUS の初期状態を push します
   （capability 登録前に送って host に捨てられるのを避けるため）。
 - uplink は best-effort です。host が読んでいない間（監視停止中など）の packet は失われます。
+- BLE transport では、下位の `zmk-raw-hid` が notify 完了まで送信 buffer を保持し、uplink をキューで
+  直列化する必要があります。`DEVICE_HELLO` 直後は `LAYER_STATE` と `BATTERY_STATUS` が連続しやすいため、
+  BLE で使う場合は `zmk-raw-hid` の `custom/raw-hid-custom` 相当の notify queue 実装を前提にしてください。
 
 ### レイヤー制御（APP_LAYER）
 
@@ -359,6 +367,10 @@ error_code: `0` none / `1` source_disabled / `2` missing_credentials / `3` expir
 
 `4` count(1..4) / `5+2i` source[i](0=self,1=left,2=right,3=aux) / `6+2i` level[i](0..100, `0xFF`=unknown) /
 以降 reserved。**seq は持ちません**（byte7 は entry 領域）。`src/battery_report.c`。
+
+`0xFF` は unknown / disconnected を表します。hitsuki46 のような split central 構成では、左右ペリフェラルが
+未接続または電源OFFのまま initial push が走ると、host には `BATTERY_STATUS` packet 自体は届いていても
+level は `0xFF` になります。host 側ではこの値を `null` として扱い、`--%` / `?` 表示になります。
 
 ### HOST_ACTION (`0x50`, D→H)
 
