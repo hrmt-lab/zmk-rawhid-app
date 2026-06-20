@@ -415,6 +415,7 @@ src/
   time_sync.c
   ai_usage.c
   identity.c            … device_uid_hash / capabilities 生成
+  studio_identity.c     … ZMK Studio get_device_info().serial_number を UID hex で上書き
   uplink.c              … uplink 共通 helper・HELLO後の初期 push
   battery_report.c      … BATTERY_STATUS uplink
   key_stats.c           … KEY_STATS uplink
@@ -493,6 +494,38 @@ FNV-1a 64bit でハッシュ化した値のみを送ります。hash 結果が 0
 | 8 | KEY_PRESS | `RAWHID_APP_KEY_PRESS` |
 
 Host 側はこのビットを見て、未対応デバイスへのパケット送信をスキップできます。
+
+## ZMK Studio の個体識別（`get_device_info().serial_number`）
+
+RawHID-Host は、Host Link で接続したデバイスと **ZMK Studio** で接続したデバイスを
+「同一個体」として紐付けたい（キーテスター／ヒートマップの統計紐付けなど）。
+
+upstream の ZMK は `get_device_info().serial_number` に `hwinfo_get_device_id()` の**生バイト**を
+入れるため、(1) Host Link の `device_uid_hash` とは表現が異なり一致せず、(2) hwinfo が無い個体や
+BLE 接続では**空**になりやすい。
+
+そこで `CONFIG_RAWHID_APP` + `CONFIG_ZMK_STUDIO_RPC` のとき、`src/studio_identity.c` が
+`core/get_device_info` ハンドラを上書きし、`serial_number` に
+**`device_uid_hash` と同じ u64 を 16 桁の小文字 hex 文字列**（`%016llx` 相当・最上位ニブル先頭）で入れる。
+これにより常に非空・再起動後も安定・同一名キーボードが複数台あっても区別可能になる。
+
+```
+serial_number(ASCII, UTF-8) = lower_hex(device_uid_hash_u64, 16桁, 最上位ニブル先頭)
+```
+
+- `device_uid_hash == 0`（identity unavailable）の場合も `"0000000000000000"` を返して空にはしないが、
+  複数個体で衝突するため `LOG_WRN` で警告を出す。通常は `rawhid_app_identity_get_uid_hash()` が
+  非ゼロの安定 UID を返す前提。
+- proto（`serial_number` は `bytes`）も `device_uid_hash` の生成ルールも変更していない。
+
+**Host 側の照合:** `DEVICE_HELLO` の `device_uid_hash`(u64 LE) を同じく `%016x`（小文字・最上位ニブル先頭）
+に整形した文字列と、`get_device_info().serial_number`(UTF-8) を直接比較すれば同一個体と判定できる。
+
+**上書きの仕組み（メモ）:** ZMK は RPC ハンドラを iterable section にシンボル名順（リンカ `SORT_BY_NAME`）で
+並べ、`request_choice` が一致した**最初の1件**を呼ぶ。`src/studio_identity.c` のハンドラ変数名
+`core_subsystem_handler_00_get_device_info` は、`core_` プレフィックスで core ブロック内に収まりつつ
+upstream の `core_subsystem_handler_get_device_info` より前にソートされるよう意図的に命名している
+（この名前で upstream を上書きしているため、安易にリネームしないこと）。
 
 ---
 

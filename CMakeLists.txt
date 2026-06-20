@@ -4,6 +4,13 @@ if(CONFIG_DT_HAS_ZMK_BEHAVIOR_HOST_ACTION_ENABLED)
   target_sources(app PRIVATE src/behaviors/behavior_host_action.c)
 endif()
 
+# Studio get_device_info override. Compiled into `app` (not the zephyr_library
+# below) so it inherits the app's generated-proto include path and build
+# ordering for <proto/zmk/*.pb.h>.
+if(CONFIG_RAWHID_APP AND CONFIG_ZMK_STUDIO_RPC)
+  target_sources(app PRIVATE src/studio_identity.c)
+endif()
+
 if(CONFIG_RAWHID_APP)
   zephyr_library()
   zephyr_library_sources(src/dispatch.c)
