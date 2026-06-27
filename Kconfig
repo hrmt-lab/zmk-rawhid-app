@@ -38,8 +38,10 @@ config RAWHID_APP_BATTERY_REPORT
     depends on RAW_HID
     select RAWHID_APP
     help
-      Send split peripheral battery levels to the host. Source IDs are reported
-      as 1-based peripheral slots; level 0xff means disconnected or unknown.
+      Send central/self and split peripheral battery levels to the host.
+      Source 0 is the central/self RawHID endpoint; sources 1..3 are
+      peripheral slots. Level 0xff means unknown, not available, or
+      disconnected.
 
 config RAWHID_APP_HOST_ACTION
     bool "Enable RawHID HOST_ACTION behavior uplink"

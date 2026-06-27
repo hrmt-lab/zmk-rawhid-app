@@ -13,7 +13,7 @@
 
 さらに、デバイス → ホストの **uplink**（device-initiated packet）として
 
-- **BATTERY_STATUS**: 本体 / 左右ペリフェラルのバッテリー残量
+- **BATTERY_STATUS**: Central/Self / ペリフェラルのバッテリー残量
 - **HOST_ACTION**: キーから PC 側操作をトリガーする（`&host_action` behavior）
 - **KEY_STATS**: キー位置ごとの打鍵数（キーの内容は送らない）
 - **LAYER_STATE**: 現在の最上位レイヤーと layer mask（表示用）
@@ -80,7 +80,7 @@ CONFIG_RAWHID_APP_KEY_PRESS=y
 | `RAWHID_APP_TIME_SYNC` | TIME_SYNC（時刻同期＋getter） |
 | `RAWHID_APP_AI_USAGE` | AI_USAGE（使用率保持＋getter） |
 | `RAWHID_APP_LAYER_STATE_REPORT` | LAYER_STATE uplink（現在レイヤーと mask） |
-| `RAWHID_APP_BATTERY_REPORT` | BATTERY_STATUS uplink（左右ペリフェラル残量） |
+| `RAWHID_APP_BATTERY_REPORT` | BATTERY_STATUS uplink（Central/Self とペリフェラル残量） |
 | `RAWHID_APP_HOST_ACTION` | HOST_ACTION uplink（`&host_action <id> <value>`） |
 | `RAWHID_APP_KEY_STATS` | KEY_STATS uplink（`uint16_t * ZMK_KEYMAP_LEN` の RAM を使用） |
 | `RAWHID_APP_KEY_PRESS` | KEY_PRESS uplink（押下/離上イベントを即時送信） |
@@ -144,13 +144,18 @@ keymap 例（任意のレイヤーのキーに割り当てる）:
 CONFIG_RAWHID_APP_BATTERY_REPORT=y
 ```
 
-ZMK のバッテリーイベントを購読し、本体 / 左 / 右の残量を送信します。残量変化時に加えて約5分周期でも送り、
-split 切断時は `0xFF`（unknown / disconnected）を送ります。キーマップやCコードの追加は不要です。
+ZMK のバッテリーイベントを購読し、Central/Self とペリフェラルの残量を送信します。
+残量変化時に加えて約5分周期でも送り、未取得・非対応・split 切断時は
+`0xFF`（unknown / not available / disconnected）を送ります。キーマップやCコードの追加は不要です。
 
-左右ペリフェラルが未接続または電源OFFの間は、firmware 側の `levels[]` は `0xFF` のままです。この場合
-RawHID Host では `--%` や `?` と表示されます。これは packet が届いていない状態ではなく、
-`BATTERY_STATUS` の level が unknown であることを示します。左右ペリフェラルが接続され、
-`zmk_peripheral_battery_state_changed` が発火すると `0..100` の実残量が送信されます。
+`source=0` は Central/Self（RawHID endpoint）、`source=1..3` は Peripheral 1..3 です。
+USB 給電 dongle のように Central/Self の残量が取れない構成では `source=0, level=0xFF`
+を送ります。host 側は `0xFF` の source を通常表示から外せるため、この場合は
+`P1:N%` のようにペリフェラルだけ表示できます。
+
+ペリフェラルが未接続または電源OFFの間は、firmware 側の該当 level は `0xFF` のままです。
+これは packet が届いていない状態ではなく、`BATTERY_STATUS` の level が unknown であることを示します。
+ペリフェラルが接続され、`zmk_peripheral_battery_state_changed` が発火すると `0..100` の実残量が送信されます。
 
 ### キー統計（KEY_STATS uplink）
 
@@ -365,12 +370,18 @@ error_code: `0` none / `1` source_disabled / `2` missing_credentials / `3` expir
 
 ### BATTERY_STATUS (`0x40`, D→H)
 
-`4` count(1..4) / `5+2i` source[i](0=self,1=left,2=right,3=aux) / `6+2i` level[i](0..100, `0xFF`=unknown) /
+`4` count(1..4) /
+`5+2i` source[i](0=Central/Self,1=Peripheral 1,2=Peripheral 2,3=Peripheral 3) /
+`6+2i` level[i](0..100, `0xFF`=unknown/not available/disconnected) /
 以降 reserved。**seq は持ちません**（byte7 は entry 領域）。`src/battery_report.c`。
 
-`0xFF` は unknown / disconnected を表します。hitsuki46 のような split central 構成では、左右ペリフェラルが
-未接続または電源OFFのまま initial push が走ると、host には `BATTERY_STATUS` packet 自体は届いていても
-level は `0xFF` になります。host 側ではこの値を `null` として扱い、`--%` / `?` 表示になります。
+`source=0` は常に Central/Self を表します。Central/Self の残量が取れない構成では
+`source=0, level=0xFF` を送ります。`source=1..3` は左右を意味せず、ZMK の peripheral slot を
+1-based にした値です。
+
+例: USB給電 dongle + peripheral 1つでは `source=0, level=0xFF` と
+`source=1, level=0..100` を送ります。host 側では `0xFF` の source を通常表示から外し、
+`P1:N%` のみ表示できます。
 
 ### HOST_ACTION (`0x50`, D→H)
 
