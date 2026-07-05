@@ -78,10 +78,11 @@ int rawhid_app_host_action_send(uint8_t action_id, uint8_t value) {
 #if IS_ENABLED(CONFIG_RAWHID_APP_HOST_ACTION)
     uint8_t buf[RAWHID_APP_PACKET_SIZE];
 
-    rawhid_app_uplink_prepare(buf, RAWHID_APP_PACKET_HOST_ACTION);
-    buf[4] = action_id;
-    buf[5] = value;
+    rawhid_app_uplink_prepare(buf, RAWHID_APP_PACKET_HOST_ACTION, 2);
     buf[RAWHID_APP_OFFSET_SEQ] = rawhid_app_uplink_next_seq(RAWHID_APP_PACKET_HOST_ACTION);
+    uint8_t *payload = &buf[RAWHID_APP_OFFSET_PAYLOAD];
+    payload[0] = action_id;
+    payload[1] = value;
 
     return rawhid_app_uplink_send(buf);
 #else

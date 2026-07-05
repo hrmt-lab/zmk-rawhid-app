@@ -13,8 +13,9 @@
 
 LOG_MODULE_DECLARE(zmk, CONFIG_ZMK_LOG_LEVEL);
 
-#define LAYER_STATE_ACTIVE_LAYER 4
-#define LAYER_STATE_MASK 8
+#define LAYER_STATE_PAYLOAD_LEN 8
+#define LAYER_STATE_ACTIVE_LAYER 0
+#define LAYER_STATE_MASK 4
 #define LAYER_STATE_DEBOUNCE_MS 50
 
 static void layer_state_work_handler(struct k_work *work);
@@ -29,10 +30,11 @@ void rawhid_app_layer_state_report_send_now(void) {
         mask |= BIT(active_layer);
     }
 
-    rawhid_app_uplink_prepare(buf, RAWHID_APP_PACKET_LAYER_STATE);
-    buf[LAYER_STATE_ACTIVE_LAYER] = active_layer;
+    rawhid_app_uplink_prepare(buf, RAWHID_APP_PACKET_LAYER_STATE, LAYER_STATE_PAYLOAD_LEN);
     buf[RAWHID_APP_OFFSET_SEQ] = rawhid_app_uplink_next_seq(RAWHID_APP_PACKET_LAYER_STATE);
-    sys_put_le32((uint32_t)mask, &buf[LAYER_STATE_MASK]);
+    uint8_t *payload = &buf[RAWHID_APP_OFFSET_PAYLOAD];
+    payload[LAYER_STATE_ACTIVE_LAYER] = active_layer;
+    sys_put_le32((uint32_t)mask, &payload[LAYER_STATE_MASK]);
 
     rawhid_app_uplink_send(buf);
 }

@@ -5,8 +5,9 @@
 
 #include <rawhid_app/uplink.h>
 
-#define KEY_PRESS_POSITION 4
-#define KEY_PRESS_FLAGS 5
+#define KEY_PRESS_PAYLOAD_LEN 2
+#define KEY_PRESS_POSITION 0
+#define KEY_PRESS_FLAGS 1
 #define KEY_PRESS_PRESSED 0x01
 
 static int key_press_listener(const zmk_event_t *eh) {
@@ -18,10 +19,11 @@ static int key_press_listener(const zmk_event_t *eh) {
 
     uint8_t buf[RAWHID_APP_PACKET_SIZE];
 
-    rawhid_app_uplink_prepare(buf, RAWHID_APP_PACKET_KEY_PRESS);
-    buf[KEY_PRESS_POSITION] = (uint8_t)ev->position;
-    buf[KEY_PRESS_FLAGS] = ev->state ? KEY_PRESS_PRESSED : 0x00;
+    rawhid_app_uplink_prepare(buf, RAWHID_APP_PACKET_KEY_PRESS, KEY_PRESS_PAYLOAD_LEN);
     buf[RAWHID_APP_OFFSET_SEQ] = rawhid_app_uplink_next_seq(RAWHID_APP_PACKET_KEY_PRESS);
+    uint8_t *payload = &buf[RAWHID_APP_OFFSET_PAYLOAD];
+    payload[KEY_PRESS_POSITION] = (uint8_t)ev->position;
+    payload[KEY_PRESS_FLAGS] = ev->state ? KEY_PRESS_PRESSED : 0x00;
 
     rawhid_app_uplink_send(buf);
     return ZMK_EV_EVENT_BUBBLE;

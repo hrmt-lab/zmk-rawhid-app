@@ -307,16 +307,22 @@ if (rawhid_app_ai_usage_get(2 /* claude_code */, &p) && p.present) {
 
 ---
 
-## プロトコル仕様（v1）
+## プロトコル仕様（v2）
 
-RawHID レポートは **32 byte 固定**。リトルエンディアン。
+Host Link packet は **64 byte 固定**。リトルエンディアン。
 
 | offset | 内容 |
 |---|---|
 | 0..1 | magic `"HL"` |
-| 2 | version `0x01` |
+| 2 | version `0x02` |
 | 3 | packet type |
-| 4..31 | type ごとのペイロード（未使用域 0） |
+| 4 | seq |
+| 5 | feature |
+| 6 | op |
+| 7 | status_or_flags |
+| 8 | payload_len |
+| 9..11 | reserved = 0 |
+| 12..63 | payload（`payload_len` 以降の未使用域は 0） |
 
 | 値 | 名称 | 方向 |
 |---|---|---|
@@ -333,31 +339,37 @@ RawHID レポートは **32 byte 固定**。リトルエンディアン。
 | `0x60` | KEY_STATS | D→H |
 | `0x70` | LAYER_STATE | D→H |
 | `0x80` | KEY_PRESS | D→H |
+| `0x90` | CONFIG_REQUEST | H→D（予約、未実装） |
+| `0x91` | CONFIG_RESPONSE | D→H（予約、未実装） |
 
 `0x40` 以降は device → host の uplink です。送信するには対応する capability bit を `DEVICE_HELLO` で
 立てます（host は bit が立っていない type を破棄します）。
 
-検証（`src/dispatch.c`）: magic / version / 既知 type / length==32 / 各 reserved バイトが 0。
+検証（`src/dispatch.c`）: magic / version / 既知 type / length==64 / `payload_len<=52` /
+header reserved と payload 未使用域が 0。
 
 ### HELLO
 
-`4..6` reserved / `7` seq / `8..31` reserved。HOST_HELLO に対し同じ seq で DEVICE_HELLO を返す。
+HOST_HELLO は `payload_len=0`。HOST_HELLO に対し同じ header seq で DEVICE_HELLO を返す。
+DEVICE_HELLO は `payload_len=12`、payload に `capabilities u32 LE` と `device_uid_hash u64 LE` を持つ。
 
 ### APP_LAYER (`0x30`)
 
-`4` action(1=set,2=clear) / `5` layer(0..31) / `6` reserved / `7` seq / `8..31` reserved。
+`payload_len=2`。`payload[0]` action(1=set,2=clear) / `payload[1]` layer(0..31)。
 ホストが有効化したレイヤーを1枚だけ追跡（`src/layer_control.c`）。
 
 ### TIME_SYNC (`0x20`)
 
-`4..7` unix_sec(u32) / `8..9` tz_offset_min(i16) / `10` weekday(1=Mon..7=Sun) /
-`11` format_hint(0:HM 1:HMS 2:Y-M-D 3:M-D 4:datetime 5:weekday+HM) / `12` clock_mode(0:24h,1:12h) /
-`13..31` reserved。受信時刻 + `k_uptime` 基準で現在時刻を算出（`src/time_sync.c`）。
+`payload_len=9`。`payload[0..4]` unix_sec(u32) / `payload[4..6]` tz_offset_min(i16) /
+`payload[6]` weekday(1=Mon..7=Sun) / `payload[7]` format_hint(0:HM 1:HMS 2:Y-M-D 3:M-D 4:datetime 5:weekday+HM) /
+`payload[8]` clock_mode(0:24h,1:12h)。受信時刻 + `k_uptime` 基準で現在時刻を算出（`src/time_sync.c`）。
 
 ### AI_USAGE (`0x10`)
 
-`4` provider(1=codex,2=claude_code) / `5` flags / `6..7` 5h_used_bp(u16) / `8..9` 7d_used_bp(u16) /
-`10..13` 5h_reset(u32) / `14..17` 7d_reset(u32) / `18..21` updated(u32) / `22` error_code / `23..31` reserved。
+`payload_len=19`。`payload[0]` provider(1=codex,2=claude_code) / `payload[1]` flags /
+`payload[2..4]` 5h_used_bp(u16) / `payload[4..6]` 7d_used_bp(u16) /
+`payload[6..10]` 5h_reset(u32) / `payload[10..14]` 7d_reset(u32) /
+`payload[14..18]` updated(u32) / `payload[18]` error_code。
 
 bp は basis points（10000=100.00%、受信時 0..10000 clamp）。provider ごとに保持（`src/ai_usage.c`）。
 
@@ -370,10 +382,10 @@ error_code: `0` none / `1` source_disabled / `2` missing_credentials / `3` expir
 
 ### BATTERY_STATUS (`0x40`, D→H)
 
-`4` count(1..4) /
-`5+2i` source[i](0=Central/Self,1=Peripheral 1,2=Peripheral 2,3=Peripheral 3) /
-`6+2i` level[i](0..100, `0xFF`=unknown/not available/disconnected) /
-以降 reserved。**seq は持ちません**（byte7 は entry 領域）。`src/battery_report.c`。
+`payload_len=1+count*2`。`payload[0]` count(1..4) /
+`payload[1+2i]` source[i](0=Central/Self,1=Peripheral 1,2=Peripheral 2,3=Peripheral 3) /
+`payload[2+2i]` level[i](0..100, `0xFF`=unknown/not available/disconnected)。
+MVP では header seq は 0 固定。`src/battery_report.c`。
 
 `source=0` は常に Central/Self を表します。Central/Self の残量が取れない構成では
 `source=0, level=0xFF` を送ります。`source=1..3` は左右を意味せず、ZMK の peripheral slot を
@@ -385,25 +397,27 @@ error_code: `0` none / `1` source_disabled / `2` missing_credentials / `3` expir
 
 ### HOST_ACTION (`0x50`, D→H)
 
-`4` action_id / `5` value / `6` reserved / `7` seq / `8..31` reserved。host は同一 seq の連続受信を
-1回として扱います（二重送信対策）。`action_id` / `value` の意味は host 側 config が定義します。
+`payload_len=2`。`payload[0]` action_id / `payload[1]` value。
+`action_id` / `value` の意味は host 側 config が定義します。
 `src/behaviors/behavior_host_action.c`。
 
 ### KEY_STATS (`0x60`, D→H)
 
-`4` entry_count(1..8) / `5` flags(bit0=MORE_FOLLOWS) / `6` reserved / `7` seq /
-`8+3i` position[i] / `9+3i..10+3i` delta[i](u16 LE, 0 は送らない) / 以降 reserved。
+`payload_len=4+count*3`。`payload[0]` entry_count(1..8) /
+`payload[1]` flags(bit0=MORE_FOLLOWS) / `payload[2..4]` reserved /
+`payload[4+3i]` position[i] / `payload[5+3i..7+3i]` delta[i](u16 LE, 0 は送らない)。
 非ゼロ位置のみを定期送信し 0 クリア。8 件超は複数 packet に分割し最後以外に MORE_FOLLOWS を立てます。
 `src/key_stats.c`。
 
 ### LAYER_STATE (`0x70`, D→H)
 
-`4` active_layer(0..31) / `5..6` reserved / `7` seq / `8..11` layer_mask(u32 LE, bit i = layer i active) /
-`12..31` reserved。host は表示専用に使います。`src/layer_state_report.c`。
+`payload_len=8`。`payload[0]` active_layer(0..31) / `payload[1..4]` reserved /
+`payload[4..8]` layer_mask(u32 LE, bit i = layer i active)。host は表示専用に使います。
+`src/layer_state_report.c`。
 
 ### KEY_PRESS (`0x80`, D→H)
 
-`4` position(u8) / `5` flags / `6` reserved / `7` seq / `8..31` reserved。
+`payload_len=2`。`payload[0]` position(u8) / `payload[1]` flags。
 
 flags bit0 が `1` のとき押下、`0` のとき離上です。`CONFIG_RAWHID_APP_KEY_PRESS=y` の間は
 `zmk_position_state_changed` ごとに press/release を即時送信します。監視停止中や host 未接続時の送信は
@@ -454,15 +468,17 @@ RawHID-Host が複数デバイスを個別識別し、デバイスごとに異�
 **DEVICE_HELLO のフォーマット:**
 ```
 byte 0..1   magic "HL"
-byte 2      version 0x01
+byte 2      version 0x02
 byte 3      DEVICE_HELLO (0x02)
-byte 4      protocol_min = 0x01
-byte 5      protocol_max = 0x01
-byte 6      reserved
-byte 7      seq
-byte 8..11  capabilities  u32 LE
-byte 12..19 device_uid_hash  u64 LE
-byte 20..31 reserved
+byte 4      seq
+byte 5      feature = 0
+byte 6      op = 0
+byte 7      status_or_flags = 0
+byte 8      payload_len = 12
+byte 9..11  reserved
+byte 12..15 capabilities  u32 LE
+byte 16..23 device_uid_hash  u64 LE
+byte 24..63 reserved
 ```
 
 **関連ファイル:**

@@ -22,12 +22,14 @@ static uint8_t key_press_seq;
 static void initial_push_work_handler(struct k_work *work);
 static K_WORK_DELAYABLE_DEFINE(initial_push_work, initial_push_work_handler);
 
-void rawhid_app_uplink_prepare(uint8_t *buf, enum rawhid_app_packet_type type) {
+void rawhid_app_uplink_prepare(uint8_t *buf, enum rawhid_app_packet_type type,
+                               uint8_t payload_len) {
     memset(buf, 0, RAWHID_APP_PACKET_SIZE);
     buf[RAWHID_APP_OFFSET_MAGIC_0] = RAWHID_APP_MAGIC_0;
     buf[RAWHID_APP_OFFSET_MAGIC_1] = RAWHID_APP_MAGIC_1;
     buf[RAWHID_APP_OFFSET_VERSION] = RAWHID_APP_VERSION;
     buf[RAWHID_APP_OFFSET_TYPE] = type;
+    buf[RAWHID_APP_OFFSET_PAYLOAD_LEN] = payload_len;
 }
 
 uint8_t rawhid_app_uplink_next_seq(enum rawhid_app_packet_type type) {

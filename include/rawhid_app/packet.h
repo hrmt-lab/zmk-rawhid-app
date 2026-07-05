@@ -2,15 +2,35 @@
 
 #include <stdint.h>
 
-/* RawHID application protocol (v1).
+/* RawHID application protocol (v2).
  *
- * 32 byte reports with a common header:
- *   0..1 magic "HL" / 2 version 0x01 / 3 type / 4..31 payload (reserved = 0).
+ * 64 byte packets with a common header:
+ *   0..1 magic "HL" / 2 version 0x02 / 3 type / 4 seq /
+ *   5 feature / 6 op / 7 status_or_flags / 8 payload_len /
+ *   9..11 reserved / 12..63 payload.
  * All multi-byte fields are little-endian.
  */
 
-#define RAWHID_APP_PACKET_SIZE 32
+#define RAWHID_APP_PACKET_SIZE 64
+#define RAWHID_APP_PAYLOAD_SIZE 52
 #define RAWHID_APP_MAX_LAYER   31
+
+#define RAWHID_APP_OFFSET_MAGIC_0 0
+#define RAWHID_APP_OFFSET_MAGIC_1 1
+#define RAWHID_APP_OFFSET_VERSION 2
+#define RAWHID_APP_OFFSET_TYPE 3
+#define RAWHID_APP_OFFSET_SEQ 4
+#define RAWHID_APP_OFFSET_FEATURE 5
+#define RAWHID_APP_OFFSET_OP 6
+#define RAWHID_APP_OFFSET_STATUS_OR_FLAGS 7
+#define RAWHID_APP_OFFSET_PAYLOAD_LEN 8
+#define RAWHID_APP_OFFSET_RESERVED_START 9
+#define RAWHID_APP_OFFSET_RESERVED_END 11
+#define RAWHID_APP_OFFSET_PAYLOAD 12
+
+#define RAWHID_APP_MAGIC_0 'H'
+#define RAWHID_APP_MAGIC_1 'L'
+#define RAWHID_APP_VERSION 0x02
 
 enum rawhid_app_packet_type {
     RAWHID_APP_PACKET_HOST_HELLO = 0x01,
@@ -26,6 +46,8 @@ enum rawhid_app_packet_type {
     RAWHID_APP_PACKET_KEY_STATS = 0x60,
     RAWHID_APP_PACKET_LAYER_STATE = 0x70,
     RAWHID_APP_PACKET_KEY_PRESS = 0x80,
+    RAWHID_APP_PACKET_CONFIG_REQUEST = 0x90,
+    RAWHID_APP_PACKET_CONFIG_RESPONSE = 0x91,
 };
 
 enum rawhid_app_app_layer_action {

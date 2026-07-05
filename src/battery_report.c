@@ -27,8 +27,8 @@
 
 LOG_MODULE_DECLARE(zmk, CONFIG_ZMK_LOG_LEVEL);
 
-#define BATTERY_STATUS_COUNT 4
-#define BATTERY_STATUS_ENTRIES 5
+#define BATTERY_STATUS_COUNT 0
+#define BATTERY_STATUS_ENTRIES 1
 #define BATTERY_REPORT_INTERVAL_MIN 5
 #define BATTERY_ENTRY_MAX 4
 #define BATTERY_PERIPHERAL_SOURCE_MAX 3
@@ -57,13 +57,14 @@ static int send_entries(const uint8_t *sources, const uint8_t *entry_levels, uin
 
     uint8_t buf[RAWHID_APP_PACKET_SIZE];
 
-    rawhid_app_uplink_prepare(buf, RAWHID_APP_PACKET_BATTERY_STATUS);
-    buf[BATTERY_STATUS_COUNT] = count;
+    rawhid_app_uplink_prepare(buf, RAWHID_APP_PACKET_BATTERY_STATUS, 1 + (count * 2));
+    uint8_t *payload = &buf[RAWHID_APP_OFFSET_PAYLOAD];
+    payload[BATTERY_STATUS_COUNT] = count;
 
     for (uint8_t i = 0; i < count; i++) {
         uint8_t offset = BATTERY_STATUS_ENTRIES + (i * 2);
-        buf[offset] = sources[i];
-        buf[offset + 1] = entry_levels[i];
+        payload[offset] = sources[i];
+        payload[offset + 1] = entry_levels[i];
     }
 
     return rawhid_app_uplink_send(buf);

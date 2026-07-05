@@ -14,9 +14,9 @@
 
 LOG_MODULE_DECLARE(zmk, CONFIG_ZMK_LOG_LEVEL);
 
-#define KEY_STATS_COUNT 4
-#define KEY_STATS_FLAGS 5
-#define KEY_STATS_ENTRIES 8
+#define KEY_STATS_COUNT 0
+#define KEY_STATS_FLAGS 1
+#define KEY_STATS_ENTRIES 4
 #define KEY_STATS_ENTRY_SIZE 3
 #define KEY_STATS_MAX_ENTRIES 8
 #define KEY_STATS_MORE_FOLLOWS BIT(0)
@@ -36,15 +36,18 @@ static void send_packet(uint8_t positions[KEY_STATS_MAX_ENTRIES],
                         bool more_follows) {
     uint8_t buf[RAWHID_APP_PACKET_SIZE];
 
-    rawhid_app_uplink_prepare(buf, RAWHID_APP_PACKET_KEY_STATS);
-    buf[KEY_STATS_COUNT] = count;
-    buf[KEY_STATS_FLAGS] = more_follows ? KEY_STATS_MORE_FOLLOWS : 0;
+    rawhid_app_uplink_prepare(buf, RAWHID_APP_PACKET_KEY_STATS,
+                              KEY_STATS_ENTRIES + (count * KEY_STATS_ENTRY_SIZE));
     buf[RAWHID_APP_OFFSET_SEQ] = rawhid_app_uplink_next_seq(RAWHID_APP_PACKET_KEY_STATS);
+    uint8_t *payload = &buf[RAWHID_APP_OFFSET_PAYLOAD];
+    payload[KEY_STATS_COUNT] = count;
+    payload[KEY_STATS_FLAGS] = more_follows ? KEY_STATS_MORE_FOLLOWS : 0;
+    /* payload[2..4] reserved zero is covered by rawhid_app_uplink_prepare(). */
 
     for (uint8_t i = 0; i < count; i++) {
         uint8_t offset = KEY_STATS_ENTRIES + (i * KEY_STATS_ENTRY_SIZE);
-        buf[offset] = positions[i];
-        sys_put_le16(deltas[i], &buf[offset + 1]);
+        payload[offset] = positions[i];
+        sys_put_le16(deltas[i], &payload[offset + 1]);
     }
 
     rawhid_app_uplink_send(buf);
