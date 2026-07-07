@@ -60,6 +60,28 @@ enum rawhid_app_ai_provider {
     RAWHID_APP_AI_PROVIDER_CLAUDE_CODE = 2,
 };
 
+enum rawhid_app_config_feature {
+    RAWHID_APP_CONFIG_FEATURE_ENCODER = 0x01,
+};
+
+enum rawhid_app_config_op {
+    RAWHID_APP_CONFIG_OP_GET_INFO = 0x01,
+    RAWHID_APP_CONFIG_OP_GET_BINDINGS = 0x02,
+    RAWHID_APP_CONFIG_OP_SET_BINDINGS = 0x03,
+};
+
+enum rawhid_app_config_status {
+    RAWHID_APP_CONFIG_STATUS_OK = 0x00,
+    RAWHID_APP_CONFIG_STATUS_BAD_PACKET = 0x01,
+    RAWHID_APP_CONFIG_STATUS_UNSUPPORTED_FEATURE = 0x02,
+    RAWHID_APP_CONFIG_STATUS_UNSUPPORTED_OP = 0x03,
+    RAWHID_APP_CONFIG_STATUS_INVALID_ARGUMENT = 0x04,
+    RAWHID_APP_CONFIG_STATUS_BUSY = 0x05,
+    RAWHID_APP_CONFIG_STATUS_NOT_FOUND = 0x06,
+    RAWHID_APP_CONFIG_STATUS_STORAGE_ERROR = 0x07,
+    RAWHID_APP_CONFIG_STATUS_INTERNAL_ERROR = 0x08,
+};
+
 enum rawhid_app_time_format {
     RAWHID_APP_TIME_FORMAT_TIME_HM = 0,
     RAWHID_APP_TIME_FORMAT_TIME_HMS = 1,
@@ -102,6 +124,14 @@ struct rawhid_app_packet {
             uint32_t updated_unix;
             uint8_t error_code;
         } ai_usage;
+        struct {
+            uint8_t seq;
+            uint8_t feature;
+            uint8_t op;
+            uint8_t flags;
+            uint8_t payload_len;
+            uint8_t payload[RAWHID_APP_PAYLOAD_SIZE];
+        } config_request;
     };
 };
 

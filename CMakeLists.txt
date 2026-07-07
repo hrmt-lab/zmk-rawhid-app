@@ -11,6 +11,10 @@ if(CONFIG_RAWHID_APP AND CONFIG_ZMK_STUDIO_RPC)
   target_sources(app PRIVATE src/studio_identity.c)
 endif()
 
+if(CONFIG_RAWHID_APP_CONFIG_RPC)
+  target_sources(app PRIVATE src/encoder_runtime.c)
+endif()
+
 if(CONFIG_RAWHID_APP)
   zephyr_library()
   zephyr_library_sources(src/dispatch.c)

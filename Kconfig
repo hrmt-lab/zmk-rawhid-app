@@ -73,3 +73,12 @@ config RAWHID_APP_LAYER_STATE_REPORT
     help
       Send the current highest active layer and layer-state mask to the host
       after layer changes and after HOST_HELLO.
+
+config RAWHID_APP_CONFIG_RPC
+    bool "Enable RawHID CONFIG_RPC requests"
+    depends on RAW_HID
+    select RAWHID_APP
+    help
+      Handle Host Link CONFIG_REQUEST / CONFIG_RESPONSE packets. The initial
+      encoder implementation supports GET_INFO, GET_BINDINGS, and runtime-only
+      SET_BINDINGS.

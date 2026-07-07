@@ -162,7 +162,9 @@ uint32_t rawhid_app_identity_get_capabilities(void) {
     if (IS_ENABLED(CONFIG_RAWHID_APP_KEY_PRESS)) {
         caps |= BIT(8);
     }
-    /* bit 9 (CONFIG_RPC): enable only after CONFIG_REQUEST handling is implemented. */
+    if (IS_ENABLED(CONFIG_RAWHID_APP_CONFIG_RPC)) {
+        caps |= BIT(9);
+    }
 
     return caps;
 }
