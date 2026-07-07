@@ -10,6 +10,8 @@
 #include <zmk/keymap.h>
 #include <zmk/sensors.h>
 
+#include <zephyr/kernel.h>
+#include <zephyr/sys/atomic.h>
 #include <zephyr/sys/byteorder.h>
 #include <zephyr/sys/util.h>
 
@@ -52,6 +54,8 @@
 #define RAWHID_APP_CONFIG_ENCODER_GET_BINDINGS_REQUEST_LEN 5
 #define RAWHID_APP_CONFIG_ENCODER_GET_BINDINGS_RESPONSE_LEN 28
 #define RAWHID_APP_CONFIG_ENCODER_SET_BINDINGS_REQUEST_LEN 28
+#define RAWHID_APP_CONFIG_ENCODER_GET_DIRTY_RESPONSE_LEN 1
+#define RAWHID_APP_CONFIG_ENCODER_CLEAR_OVERRIDE_REQUEST_LEN 5
 #define RAWHID_APP_CONFIG_ENCODER_LAYER_ID 0
 #define RAWHID_APP_CONFIG_ENCODER_ENCODER_ID 4
 #define RAWHID_APP_CONFIG_ENCODER_SET_UPDATE_MASK 5
@@ -69,7 +73,10 @@
 #define RAWHID_APP_CONFIG_ENCODER_BINDING_PARAM2 6
 #define RAWHID_APP_CONFIG_ENCODER_SOURCE_KEYMAP 0x00
 #define RAWHID_APP_CONFIG_ENCODER_SOURCE_OVERRIDE 0x01
+#define RAWHID_APP_CONFIG_ENCODER_FLAG_STALE_SAVED_EXISTS BIT(0)
+#define RAWHID_APP_CONFIG_ENCODER_FLAG_SAVED_EXISTS BIT(1)
 #define RAWHID_APP_CONFIG_ENCODER_FLAG_RUNTIME_DIRTY BIT(2)
+#define RAWHID_APP_CONFIG_ENCODER_FLAG_INVALID_SAVED_EXISTS BIT(3)
 #define RAWHID_APP_CONFIG_ENCODER_INVALID_BEHAVIOR_ID UINT16_MAX
 
 BUILD_ASSERT(CONFIG_RAW_HID_REPORT_SIZE == RAWHID_APP_PACKET_SIZE,
@@ -77,6 +84,11 @@ BUILD_ASSERT(CONFIG_RAW_HID_REPORT_SIZE == RAWHID_APP_PACKET_SIZE,
 
 static uint8_t hello_response[RAWHID_APP_PACKET_SIZE];
 static uint8_t config_response[RAWHID_APP_PACKET_SIZE];
+
+static atomic_t config_encoder_save_pending;
+static uint8_t config_encoder_save_seq;
+static uint8_t config_encoder_save_feature;
+static uint8_t config_encoder_save_op;
 
 static bool reserved_bytes_are_zero(const uint8_t *data, uint8_t start, uint8_t end_inclusive) {
     for (uint8_t i = start; i <= end_inclusive; i++) {
@@ -392,7 +404,8 @@ static void handle_config_encoder_get_bindings(const struct rawhid_app_packet *p
     uint32_t layer_id = sys_get_le32(&request[RAWHID_APP_CONFIG_ENCODER_LAYER_ID]);
     uint8_t encoder_id = request[RAWHID_APP_CONFIG_ENCODER_ENCODER_ID];
 
-    if (layer_id >= ZMK_KEYMAP_LAYERS_LEN || encoder_id >= ZMK_KEYMAP_SENSORS_LEN) {
+    if (!rawhid_app_encoder_runtime_layer_exists(layer_id) ||
+        encoder_id >= ZMK_KEYMAP_SENSORS_LEN) {
         send_config_response(seq, feature, op, RAWHID_APP_CONFIG_STATUS_INVALID_ARGUMENT, NULL, 0);
         return;
     }
@@ -400,25 +413,22 @@ static void handle_config_encoder_get_bindings(const struct rawhid_app_packet *p
     uint8_t response[RAWHID_APP_CONFIG_ENCODER_GET_BINDINGS_RESPONSE_LEN] = {0};
     sys_put_le32(layer_id, &response[RAWHID_APP_CONFIG_ENCODER_LAYER_ID]);
     response[RAWHID_APP_CONFIG_ENCODER_ENCODER_ID] = encoder_id;
-    response[RAWHID_APP_CONFIG_ENCODER_BINDINGS_SOURCE] =
-        RAWHID_APP_CONFIG_ENCODER_SOURCE_KEYMAP;
-    response[RAWHID_APP_CONFIG_ENCODER_BINDINGS_FLAGS] = 0;
     response[RAWHID_APP_CONFIG_ENCODER_BINDINGS_RESERVED] = 0;
 
     struct rawhid_app_encoder_runtime_bindings bindings;
     if (rawhid_app_encoder_runtime_get(layer_id, encoder_id, &bindings)) {
-        response[RAWHID_APP_CONFIG_ENCODER_BINDINGS_SOURCE] =
-            RAWHID_APP_CONFIG_ENCODER_SOURCE_OVERRIDE;
-        response[RAWHID_APP_CONFIG_ENCODER_BINDINGS_FLAGS] =
-            bindings.dirty ? RAWHID_APP_CONFIG_ENCODER_FLAG_RUNTIME_DIRTY : 0;
+        response[RAWHID_APP_CONFIG_ENCODER_BINDINGS_SOURCE] = bindings.source;
+        response[RAWHID_APP_CONFIG_ENCODER_BINDINGS_FLAGS] = bindings.flags;
 
-        if (!config_encoder_encode_binding(&bindings.cw_binding,
-                                           &response[RAWHID_APP_CONFIG_ENCODER_CW_BINDING]) ||
-            !config_encoder_encode_binding(&bindings.ccw_binding,
-                                           &response[RAWHID_APP_CONFIG_ENCODER_CCW_BINDING])) {
-            send_config_response(seq, feature, op, RAWHID_APP_CONFIG_STATUS_INTERNAL_ERROR, NULL,
-                                 0);
-            return;
+        if (bindings.source == RAWHID_APP_CONFIG_ENCODER_SOURCE_OVERRIDE) {
+            if (!config_encoder_encode_binding(&bindings.cw_binding,
+                                               &response[RAWHID_APP_CONFIG_ENCODER_CW_BINDING]) ||
+                !config_encoder_encode_binding(&bindings.ccw_binding,
+                                               &response[RAWHID_APP_CONFIG_ENCODER_CCW_BINDING])) {
+                send_config_response(seq, feature, op, RAWHID_APP_CONFIG_STATUS_INTERNAL_ERROR,
+                                     NULL, 0);
+                return;
+            }
         }
     }
 
@@ -449,7 +459,8 @@ static void handle_config_encoder_set_bindings(const struct rawhid_app_packet *p
     uint8_t update_mask = request[RAWHID_APP_CONFIG_ENCODER_SET_UPDATE_MASK];
 
     if (update_mask != RAWHID_APP_CONFIG_ENCODER_SET_UPDATE_MASK_BOTH ||
-        layer_id >= ZMK_KEYMAP_LAYERS_LEN || encoder_id >= ZMK_KEYMAP_SENSORS_LEN) {
+        !rawhid_app_encoder_runtime_layer_exists(layer_id) ||
+        encoder_id >= ZMK_KEYMAP_SENSORS_LEN) {
         send_config_response(seq, feature, op, RAWHID_APP_CONFIG_STATUS_INVALID_ARGUMENT, NULL, 0);
         return;
     }
@@ -465,6 +476,96 @@ static void handle_config_encoder_set_bindings(const struct rawhid_app_packet *p
     }
 
     rawhid_app_encoder_runtime_set(layer_id, encoder_id, &cw_binding, &ccw_binding);
+    send_config_response(seq, feature, op, RAWHID_APP_CONFIG_STATUS_OK, NULL, 0);
+}
+
+static void handle_config_encoder_get_dirty(const struct rawhid_app_packet *packet) {
+    uint8_t seq = packet->config_request.seq;
+    uint8_t feature = packet->config_request.feature;
+    uint8_t op = packet->config_request.op;
+
+    if (packet->config_request.payload_len != 0) {
+        send_config_response(seq, feature, op, RAWHID_APP_CONFIG_STATUS_BAD_PACKET, NULL, 0);
+        return;
+    }
+
+    uint8_t payload[RAWHID_APP_CONFIG_ENCODER_GET_DIRTY_RESPONSE_LEN] = {
+        rawhid_app_encoder_runtime_dirty() ? 1 : 0,
+    };
+    send_config_response(seq, feature, op, RAWHID_APP_CONFIG_STATUS_OK, payload, sizeof(payload));
+}
+
+static void config_encoder_save_work_handler(struct k_work *work) {
+    ARG_UNUSED(work);
+
+    int rc = rawhid_app_encoder_runtime_save();
+    send_config_response(config_encoder_save_seq, config_encoder_save_feature,
+                         config_encoder_save_op,
+                         rc < 0 ? RAWHID_APP_CONFIG_STATUS_STORAGE_ERROR
+                                : RAWHID_APP_CONFIG_STATUS_OK,
+                         NULL, 0);
+    atomic_clear(&config_encoder_save_pending);
+}
+
+K_WORK_DEFINE(config_encoder_save_work, config_encoder_save_work_handler);
+
+static void handle_config_encoder_save(const struct rawhid_app_packet *packet) {
+    uint8_t seq = packet->config_request.seq;
+    uint8_t feature = packet->config_request.feature;
+    uint8_t op = packet->config_request.op;
+
+    if (packet->config_request.payload_len != 0) {
+        send_config_response(seq, feature, op, RAWHID_APP_CONFIG_STATUS_BAD_PACKET, NULL, 0);
+        return;
+    }
+
+    if (!atomic_cas(&config_encoder_save_pending, 0, 1)) {
+        send_config_response(seq, feature, op, RAWHID_APP_CONFIG_STATUS_INTERNAL_ERROR, NULL, 0);
+        return;
+    }
+
+    config_encoder_save_seq = seq;
+    config_encoder_save_feature = feature;
+    config_encoder_save_op = op;
+    k_work_submit(&config_encoder_save_work);
+}
+
+static void handle_config_encoder_discard(const struct rawhid_app_packet *packet) {
+    uint8_t seq = packet->config_request.seq;
+    uint8_t feature = packet->config_request.feature;
+    uint8_t op = packet->config_request.op;
+
+    if (packet->config_request.payload_len != 0) {
+        send_config_response(seq, feature, op, RAWHID_APP_CONFIG_STATUS_BAD_PACKET, NULL, 0);
+        return;
+    }
+
+    rawhid_app_encoder_runtime_discard();
+    send_config_response(seq, feature, op, RAWHID_APP_CONFIG_STATUS_OK, NULL, 0);
+}
+
+static void handle_config_encoder_clear_override(const struct rawhid_app_packet *packet) {
+    uint8_t seq = packet->config_request.seq;
+    uint8_t feature = packet->config_request.feature;
+    uint8_t op = packet->config_request.op;
+
+    if (packet->config_request.payload_len !=
+        RAWHID_APP_CONFIG_ENCODER_CLEAR_OVERRIDE_REQUEST_LEN) {
+        send_config_response(seq, feature, op, RAWHID_APP_CONFIG_STATUS_BAD_PACKET, NULL, 0);
+        return;
+    }
+
+    const uint8_t *request = packet->config_request.payload;
+    uint32_t layer_id = sys_get_le32(&request[RAWHID_APP_CONFIG_ENCODER_LAYER_ID]);
+    uint8_t encoder_id = request[RAWHID_APP_CONFIG_ENCODER_ENCODER_ID];
+
+    if (!rawhid_app_encoder_runtime_layer_exists(layer_id) ||
+        encoder_id >= ZMK_KEYMAP_SENSORS_LEN) {
+        send_config_response(seq, feature, op, RAWHID_APP_CONFIG_STATUS_INVALID_ARGUMENT, NULL, 0);
+        return;
+    }
+
+    rawhid_app_encoder_runtime_clear(layer_id, encoder_id);
     send_config_response(seq, feature, op, RAWHID_APP_CONFIG_STATUS_OK, NULL, 0);
 }
 
@@ -493,6 +594,18 @@ static void handle_config_request(const struct rawhid_app_packet *packet) {
         break;
     case RAWHID_APP_CONFIG_OP_SET_BINDINGS:
         handle_config_encoder_set_bindings(packet);
+        break;
+    case RAWHID_APP_CONFIG_OP_GET_DIRTY:
+        handle_config_encoder_get_dirty(packet);
+        break;
+    case RAWHID_APP_CONFIG_OP_SAVE:
+        handle_config_encoder_save(packet);
+        break;
+    case RAWHID_APP_CONFIG_OP_DISCARD:
+        handle_config_encoder_discard(packet);
+        break;
+    case RAWHID_APP_CONFIG_OP_CLEAR_OVERRIDE:
+        handle_config_encoder_clear_override(packet);
         break;
     default:
         send_config_response(seq, feature, op, RAWHID_APP_CONFIG_STATUS_UNSUPPORTED_OP, NULL, 0);

@@ -78,7 +78,11 @@ config RAWHID_APP_CONFIG_RPC
     bool "Enable RawHID CONFIG_RPC requests"
     depends on RAW_HID
     select RAWHID_APP
+    select SETTINGS
+    select TINYCRYPT
+    select TINYCRYPT_SHA256
     help
       Handle Host Link CONFIG_REQUEST / CONFIG_RESPONSE packets. The initial
-      encoder implementation supports GET_INFO, GET_BINDINGS, and runtime-only
-      SET_BINDINGS.
+      encoder implementation supports GET_INFO, GET_BINDINGS, SET_BINDINGS,
+      GET_DIRTY, SAVE, DISCARD, and CLEAR_OVERRIDE. SAVE requires a working
+      settings backend in the keyboard configuration.
