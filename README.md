@@ -8,6 +8,7 @@
 - **APP_LAYER**: ホストからの ZMK レイヤー制御
 - **TIME_SYNC**: ホスト時刻の同期・保持
 - **AI_USAGE**: Claude Code / Codex 使用率の保持
+- **CONFIG_RPC**: ZMK Studio 用の encoder runtime override の編集・保存
 
 を行い、解析結果を getter で他モジュール（例: Prospector ディスプレイ）へ公開します。
 
@@ -65,6 +66,8 @@ CONFIG_RAWHID_APP_BATTERY_REPORT=y
 CONFIG_RAWHID_APP_HOST_ACTION=y
 CONFIG_RAWHID_APP_KEY_STATS=y
 CONFIG_RAWHID_APP_KEY_PRESS=y
+# ZMK Studio から encoder binding を編集・保存する場合
+CONFIG_RAWHID_APP_CONFIG_RPC=y
 ```
 
 `CONFIG_RAWHID_APP` 単体で HELLO 応答が有効になり、各サブ機能を個別に足せます。
@@ -84,6 +87,7 @@ CONFIG_RAWHID_APP_KEY_PRESS=y
 | `RAWHID_APP_HOST_ACTION` | HOST_ACTION uplink（`&host_action <id> <value>`） |
 | `RAWHID_APP_KEY_STATS` | KEY_STATS uplink（`uint16_t * ZMK_KEYMAP_LEN` の RAM を使用） |
 | `RAWHID_APP_KEY_PRESS` | KEY_PRESS uplink（押下/離上イベントを即時送信） |
+| `RAWHID_APP_CONFIG_RPC` | Config RPC の ENCODER feature。settings backend を使用してoverrideを保存する |
 
 ---
 
@@ -135,6 +139,28 @@ keymap 例（任意のレイヤーのキーに割り当てる）:
 ここで決めた `action_id` を、RawHID Host アプリの **「アクション」画面**（`docs/manual-app-usage.md` の
 「アクション」セクション）で同じ番号に対して動作を割り当ててください。両側の `action_id` が一致して
 初めて動作します。
+
+### ZMK Studio encoder override（CONFIG_RPC）
+
+`.conf` に追加:
+
+```ini
+CONFIG_RAWHID_APP_CONFIG_RPC=y
+```
+
+Host Link v2のConfig RPCで、encoderごとにCW/CCWのruntime overrideを編集できます。
+ENCODER featureは `GET_INFO`、`GET_BINDINGS`、`SET_BINDINGS`、`GET_DIRTY`、`SAVE`、`DISCARD`、
+`CLEAR_OVERRIDE` をサポートします。`SET_BINDINGS` はRAM上の変更だけを行い、`SAVE` がsettings/NVSへ
+保存します。
+
+overrideはレイヤーindexではなく ZMK Studio の `(Layer.id, encoder_id)` で管理します。途中のレイヤーを
+削除しても後続レイヤーのoverrideは移動しません。削除レイヤーのrecordはtombstoneとして保持され、SAVE時に
+対応する `keylink/enc/v1/l<layer_id>/e<encoder_id>` だけを削除します。DISCARDでは、Studio側のレイヤー
+DISCARDにより同じLayer.idが復元済みの場合だけsaved bindingを復元します。
+
+現在存在しないLayer.idを持つsettings recordは起動時にも保持し、実行や別レイヤーへの適用はしません。
+`GET_DIRTY` はこのorphan recordをdirtyとして返し、次回SAVEで削除します。overrideがないencoderイベントは
+従来どおり `.keymap` の `sensor-bindings` へ渡されます。
 
 ### バッテリー残量（BATTERY_STATUS uplink）
 
@@ -339,8 +365,8 @@ Host Link packet は **64 byte 固定**。リトルエンディアン。
 | `0x60` | KEY_STATS | D→H |
 | `0x70` | LAYER_STATE | D→H |
 | `0x80` | KEY_PRESS | D→H |
-| `0x90` | CONFIG_REQUEST | H→D（予約、未実装） |
-| `0x91` | CONFIG_RESPONSE | D→H（予約、未実装） |
+| `0x90` | CONFIG_REQUEST | H→D |
+| `0x91` | CONFIG_RESPONSE | D→H |
 
 `0x40` 以降は device → host の uplink です。送信するには対応する capability bit を `DEVICE_HELLO` で
 立てます（host は bit が立っていない type を破棄します）。
@@ -423,6 +449,15 @@ flags bit0 が `1` のとき押下、`0` のとき離上です。`CONFIG_RAWHID_
 `zmk_position_state_changed` ごとに press/release を即時送信します。監視停止中や host 未接続時の送信は
 既存 uplink と同じ RawHID 送信ブロックの影響を受ける可能性があります。
 
+### CONFIG_REQUEST / CONFIG_RESPONSE (`0x90` / `0x91`)
+
+`CONFIG_RAWHID_APP_CONFIG_RPC=y` のとき、ENCODER feature (`feature=0x01`) を処理します。opは
+`GET_INFO=0x01`、`GET_BINDINGS=0x02`、`SET_BINDINGS=0x03`、`GET_DIRTY=0x04`、`SAVE=0x05`、
+`DISCARD=0x06`、`CLEAR_OVERRIDE=0x07` です。Layer.idはpayloadのu32 LE、encoder_idはu8で指定します。
+
+Config RPCのheaderとop/payload形式はHost Link v2で固定です。SAVEはworkqueueでsettings操作を行い、
+完了後にresponseを返します。Hostのtimeout retryには短寿命response cacheで同じresponseを再送します。
+
 ---
 
 ## 実装構造（移植の参考）
@@ -445,6 +480,7 @@ src/
   battery_report.c      … BATTERY_STATUS uplink
   key_stats.c           … KEY_STATS uplink
   layer_state_report.c  … LAYER_STATE uplink
+  encoder_runtime.c     … Config RPC ENCODER override・settings保存・sensor event先取り
   behaviors/
     behavior_host_action.c … &host_action behavior + HOST_ACTION uplink
 dts/
