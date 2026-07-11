@@ -5,7 +5,9 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include <zephyr/device.h>
 #include <zephyr/drivers/sensor.h>
+#include <zephyr/input/input.h>
 #include <zephyr/logging/log.h>
 #include <zephyr/settings/settings.h>
 #include <zephyr/sys/byteorder.h>
@@ -28,6 +30,8 @@
 LOG_MODULE_DECLARE(zmk, CONFIG_ZMK_LOG_LEVEL);
 
 #define RAWHID_APP_ENCODER_RUNTIME_SENSOR_SLOTS MAX(ZMK_KEYMAP_SENSORS_LEN, 1)
+#define RAWHID_APP_ENCODER_RUNTIME_ENTRY_SLOTS                                               \
+    (2 * ZMK_KEYMAP_LAYERS_LEN * RAWHID_APP_ENCODER_RUNTIME_SENSOR_SLOTS)
 
 #define RAWHID_APP_ENCODER_SOURCE_KEYMAP 0x00
 #define RAWHID_APP_ENCODER_SOURCE_OVERRIDE 0x01
@@ -47,6 +51,8 @@ LOG_MODULE_DECLARE(zmk, CONFIG_ZMK_LOG_LEVEL);
 #define RAWHID_APP_ENCODER_RECORD_VERSION 1
 #define RAWHID_APP_ENCODER_RECORD_HASH_LEN 16
 #define RAWHID_APP_ENCODER_IDENTITY_SCHEMA_VERSION 1
+#define RAWHID_APP_ENCODER_POINTER_MOVE_DIVISOR 20
+#define RAWHID_APP_ENCODER_SCROLL_DETENTS_PER_NOTCH 2
 
 #define RAWHID_APP_ENCODER_RECORD_MAGIC 0
 #define RAWHID_APP_ENCODER_RECORD_VERSION_OFFSET 2
@@ -77,9 +83,27 @@ enum rawhid_app_encoder_saved_state {
     RAWHID_APP_ENCODER_SAVED_INVALID,
 };
 
+#if DT_HAS_COMPAT_STATUS_OKAY(zmk_behavior_input_two_axis)
+struct rawhid_app_encoder_two_axis_target {
+    const struct device *dev;
+    uint16_t x_code;
+    uint16_t y_code;
+};
+
+#define RAWHID_APP_ENCODER_TWO_AXIS_TARGET(node_id)                                                  \
+    {                                                                                                \
+        .dev = DEVICE_DT_GET(node_id),                                                               \
+        .x_code = DT_PROP(node_id, x_input_code),                                                    \
+        .y_code = DT_PROP(node_id, y_input_code),                                                    \
+    },
+
+static const struct rawhid_app_encoder_two_axis_target encoder_two_axis_targets[] = {
+    DT_FOREACH_STATUS_OKAY(zmk_behavior_input_two_axis, RAWHID_APP_ENCODER_TWO_AXIS_TARGET)};
+#endif
+
 struct rawhid_app_encoder_entry {
+    bool occupied;
     uint32_t layer_id;
-    uint8_t layer_index;
     uint8_t encoder_id;
     struct zmk_behavior_binding runtime_cw_binding;
     struct zmk_behavior_binding runtime_ccw_binding;
@@ -91,14 +115,20 @@ struct rawhid_app_encoder_entry {
     bool pending_saved_record;
     uint8_t saved_record[RAWHID_APP_ENCODER_RECORD_LEN];
     enum rawhid_app_encoder_saved_state saved_state;
+    struct sensor_value sensor_remainder;
+#if DT_HAS_COMPAT_STATUS_OKAY(zmk_behavior_input_two_axis)
+    int16_t two_axis_x_remainder;
+    int16_t two_axis_y_remainder;
+#endif
 };
 
-static struct rawhid_app_encoder_entry
-    encoder_entries[ZMK_KEYMAP_LAYERS_LEN][RAWHID_APP_ENCODER_RUNTIME_SENSOR_SLOTS];
+static struct rawhid_app_encoder_entry encoder_entries[RAWHID_APP_ENCODER_RUNTIME_ENTRY_SLOTS];
 
 static uint8_t encoder_save_record_buf[RAWHID_APP_ENCODER_RECORD_LEN] __aligned(4);
 static struct rawhid_app_encoder_entry
-    *encoder_save_dirty_entries[ZMK_KEYMAP_LAYERS_LEN][RAWHID_APP_ENCODER_RUNTIME_SENSOR_SLOTS];
+    *encoder_save_dirty_entries[RAWHID_APP_ENCODER_RUNTIME_ENTRY_SLOTS];
+static size_t encoder_save_dirty_entry_count;
+static bool encoder_runtime_settings_committed;
 
 static bool encoder_runtime_layer_id_to_index(uint32_t layer_id, uint8_t *layer_index) {
     if (layer_id > UINT8_MAX) {
@@ -122,28 +152,70 @@ bool rawhid_app_encoder_runtime_layer_exists(uint32_t layer_id) {
     return encoder_runtime_layer_id_to_index(layer_id, NULL);
 }
 
+static struct rawhid_app_encoder_entry *encoder_runtime_find_entry(uint32_t layer_id,
+                                                                   uint8_t encoder_id) {
+    for (size_t slot = 0; slot < ARRAY_SIZE(encoder_entries); slot++) {
+        struct rawhid_app_encoder_entry *entry = &encoder_entries[slot];
+        if (entry->occupied && entry->layer_id == layer_id && entry->encoder_id == encoder_id) {
+            return entry;
+        }
+    }
+
+    return NULL;
+}
+
+static struct rawhid_app_encoder_entry *encoder_runtime_allocate_entry(uint32_t layer_id,
+                                                                       uint8_t encoder_id) {
+    for (size_t slot = 0; slot < ARRAY_SIZE(encoder_entries); slot++) {
+        struct rawhid_app_encoder_entry *entry = &encoder_entries[slot];
+        if (!entry->occupied) {
+            memset(entry, 0, sizeof(*entry));
+            entry->occupied = true;
+            entry->layer_id = layer_id;
+            entry->encoder_id = encoder_id;
+            return entry;
+        }
+    }
+
+    LOG_ERR("encoder runtime slot pool full layer_id=%u encoder_id=%u capacity=%u", layer_id,
+            encoder_id, (unsigned int)ARRAY_SIZE(encoder_entries));
+    return NULL;
+}
+
+static struct rawhid_app_encoder_entry *
+encoder_runtime_find_or_allocate_entry(uint32_t layer_id, uint8_t encoder_id) {
+    struct rawhid_app_encoder_entry *entry = encoder_runtime_find_entry(layer_id, encoder_id);
+    return entry != NULL ? entry : encoder_runtime_allocate_entry(layer_id, encoder_id);
+}
+
+static void encoder_runtime_release_entry(struct rawhid_app_encoder_entry *entry) {
+    if (entry != NULL) {
+        memset(entry, 0, sizeof(*entry));
+    }
+}
+
 static struct rawhid_app_encoder_entry *encoder_runtime_entry_by_index(uint8_t layer_index,
                                                                        uint8_t encoder_id) {
     if (layer_index >= ZMK_KEYMAP_LAYERS_LEN || encoder_id >= ZMK_KEYMAP_SENSORS_LEN) {
         return NULL;
     }
 
-    struct rawhid_app_encoder_entry *entry = &encoder_entries[layer_index][encoder_id];
-    entry->layer_index = layer_index;
-    entry->layer_id = zmk_keymap_layer_index_to_id(layer_index);
-    entry->encoder_id = encoder_id;
-    return entry;
+    zmk_keymap_layer_id_t layer_id = zmk_keymap_layer_index_to_id(layer_index);
+    if (layer_id == ZMK_KEYMAP_LAYER_ID_INVAL) {
+        return NULL;
+    }
+
+    return encoder_runtime_find_entry(layer_id, encoder_id);
 }
 
 static struct rawhid_app_encoder_entry *encoder_runtime_entry(uint32_t layer_id,
                                                               uint8_t encoder_id) {
-    uint8_t layer_index;
-    if (!encoder_runtime_layer_id_to_index(layer_id, &layer_index) ||
+    if (!rawhid_app_encoder_runtime_layer_exists(layer_id) ||
         encoder_id >= ZMK_KEYMAP_SENSORS_LEN) {
         return NULL;
     }
 
-    return encoder_runtime_entry_by_index(layer_index, encoder_id);
+    return encoder_runtime_find_entry(layer_id, encoder_id);
 }
 
 static bool encoder_runtime_bindings_equal(const struct zmk_behavior_binding *a,
@@ -161,6 +233,14 @@ static bool encoder_runtime_matches_saved(const struct rawhid_app_encoder_entry 
     return entry->saved_state == RAWHID_APP_ENCODER_SAVED_VALID && entry->runtime_valid &&
            encoder_runtime_bindings_equal(&entry->runtime_cw_binding, &entry->saved_cw_binding) &&
            encoder_runtime_bindings_equal(&entry->runtime_ccw_binding, &entry->saved_ccw_binding);
+}
+
+static void encoder_runtime_reset_accumulators(struct rawhid_app_encoder_entry *entry) {
+    entry->sensor_remainder = (struct sensor_value){0};
+#if DT_HAS_COMPAT_STATUS_OKAY(zmk_behavior_input_two_axis)
+    entry->two_axis_x_remainder = 0;
+    entry->two_axis_y_remainder = 0;
+#endif
 }
 
 static uint8_t encoder_runtime_flags(const struct rawhid_app_encoder_entry *entry) {
@@ -199,20 +279,22 @@ static uint8_t encoder_runtime_flags(const struct rawhid_app_encoder_entry *entr
 
 bool rawhid_app_encoder_runtime_get(uint32_t layer_id, uint8_t encoder_id,
                                     struct rawhid_app_encoder_runtime_bindings *bindings) {
-    if (bindings == NULL) {
-        return false;
-    }
-
-    struct rawhid_app_encoder_entry *entry = encoder_runtime_entry(layer_id, encoder_id);
-    if (entry == NULL) {
+    if (bindings == NULL || !rawhid_app_encoder_runtime_layer_exists(layer_id) ||
+        encoder_id >= ZMK_KEYMAP_SENSORS_LEN) {
         return false;
     }
 
     memset(bindings, 0, sizeof(*bindings));
+    bindings->source = RAWHID_APP_ENCODER_SOURCE_KEYMAP;
+
+    struct rawhid_app_encoder_entry *entry = encoder_runtime_entry(layer_id, encoder_id);
+    if (entry == NULL) {
+        return true;
+    }
+
     bindings->flags = encoder_runtime_flags(entry);
 
     if (!entry->runtime_valid) {
-        bindings->source = RAWHID_APP_ENCODER_SOURCE_KEYMAP;
         return true;
     }
 
@@ -222,16 +304,19 @@ bool rawhid_app_encoder_runtime_get(uint32_t layer_id, uint8_t encoder_id,
     return true;
 }
 
-void rawhid_app_encoder_runtime_set(uint32_t layer_id, uint8_t encoder_id,
-                                    const struct zmk_behavior_binding *cw_binding,
-                                    const struct zmk_behavior_binding *ccw_binding) {
-    if (cw_binding == NULL || ccw_binding == NULL) {
-        return;
+int rawhid_app_encoder_runtime_set(uint32_t layer_id, uint8_t encoder_id,
+                                   const struct zmk_behavior_binding *cw_binding,
+                                   const struct zmk_behavior_binding *ccw_binding) {
+    if (cw_binding == NULL || ccw_binding == NULL ||
+        !rawhid_app_encoder_runtime_layer_exists(layer_id) ||
+        encoder_id >= ZMK_KEYMAP_SENSORS_LEN) {
+        return -EINVAL;
     }
 
-    struct rawhid_app_encoder_entry *entry = encoder_runtime_entry(layer_id, encoder_id);
+    struct rawhid_app_encoder_entry *entry =
+        encoder_runtime_find_or_allocate_entry(layer_id, encoder_id);
     if (entry == NULL) {
-        return;
+        return -ENOMEM;
     }
 
     entry->runtime_cw_binding = *cw_binding;
@@ -239,16 +324,22 @@ void rawhid_app_encoder_runtime_set(uint32_t layer_id, uint8_t encoder_id,
     entry->runtime_valid = true;
     entry->delete_pending = false;
     entry->runtime_dirty = !encoder_runtime_matches_saved(entry);
+    encoder_runtime_reset_accumulators(entry);
+    return 0;
 }
 
 bool rawhid_app_encoder_runtime_dirty(void) {
-    for (uint8_t layer_index = 0; layer_index < ZMK_KEYMAP_LAYERS_LEN; layer_index++) {
-        for (uint8_t encoder_id = 0; encoder_id < ZMK_KEYMAP_SENSORS_LEN; encoder_id++) {
-            struct rawhid_app_encoder_entry *entry =
-                encoder_runtime_entry_by_index(layer_index, encoder_id);
-            if (entry != NULL && (entry->runtime_dirty || entry->delete_pending)) {
-                return true;
-            }
+    for (size_t slot = 0; slot < ARRAY_SIZE(encoder_entries); slot++) {
+        struct rawhid_app_encoder_entry *entry = &encoder_entries[slot];
+        if (!entry->occupied) {
+            continue;
+        }
+
+        bool orphan_record = !rawhid_app_encoder_runtime_layer_exists(entry->layer_id) &&
+                             (entry->saved_state != RAWHID_APP_ENCODER_SAVED_NONE ||
+                              entry->pending_saved_record);
+        if (entry->runtime_dirty || entry->delete_pending || orphan_record) {
+            return true;
         }
     }
 
@@ -289,7 +380,7 @@ static bool encoder_runtime_decode_binding(const uint8_t *data, const char *dire
 
     int rc = zmk_behavior_validate_binding(binding);
     if (rc < 0) {
-        return false;
+        return rc == -ENODEV && zmk_behavior_get_binding(behavior_dev) != NULL;
     }
 
     return true;
@@ -315,6 +406,9 @@ static void encoder_runtime_identity_hash(const struct zmk_behavior_binding *bin
     struct tc_sha256_state_struct sha;
     uint8_t digest[TC_SHA256_DIGEST_SIZE];
 
+    /* ZMK does not expose a stable runtime compatible string for arbitrary
+     * behavior devices. Record v1 therefore hashes only the stable MVP fields.
+     */
     tc_sha256_init(&sha);
     encoder_runtime_hash_update_u8(&sha, RAWHID_APP_ENCODER_IDENTITY_SCHEMA_VERSION);
     encoder_runtime_hash_update_string(&sha, binding->behavior_dev);
@@ -425,6 +519,19 @@ static int encoder_runtime_persist_entry(struct rawhid_app_encoder_entry *entry)
         return rc;
     }
 
+    if (!rawhid_app_encoder_runtime_layer_exists(entry->layer_id)) {
+        if (!encoder_runtime_settings_committed) {
+            LOG_WRN("encoder tombstone delete blocked before settings load commit key=%s", key);
+            return -EIO;
+        }
+
+        rc = settings_delete(key);
+        if (rc < 0) {
+            LOG_WRN("encoder tombstone delete failed key=%s err=%d", key, rc);
+        }
+        return rc;
+    }
+
     if (entry->runtime_valid) {
         if (!encoder_runtime_binding_has_local_id(&entry->runtime_cw_binding) ||
             !encoder_runtime_binding_has_local_id(&entry->runtime_ccw_binding)) {
@@ -443,6 +550,11 @@ static int encoder_runtime_persist_entry(struct rawhid_app_encoder_entry *entry)
     }
 
     if (entry->delete_pending) {
+        if (!encoder_runtime_settings_committed) {
+            LOG_WRN("encoder override delete blocked before settings load commit key=%s", key);
+            return -EIO;
+        }
+
         rc = settings_delete(key);
         if (rc < 0) {
             LOG_WRN("encoder override delete failed key=%s err=%d", key, rc);
@@ -469,69 +581,78 @@ static void encoder_runtime_finalize_saved_entry(struct rawhid_app_encoder_entry
 }
 
 int rawhid_app_encoder_runtime_save(void) {
-    for (uint8_t layer_index = 0; layer_index < ZMK_KEYMAP_LAYERS_LEN; layer_index++) {
-        for (uint8_t encoder_id = 0; encoder_id < ZMK_KEYMAP_SENSORS_LEN; encoder_id++) {
-            struct rawhid_app_encoder_entry *entry =
-                encoder_runtime_entry_by_index(layer_index, encoder_id);
-            if (entry == NULL || (!entry->runtime_dirty && !entry->delete_pending)) {
-                continue;
-            }
+    encoder_save_dirty_entry_count = 0;
+    memset(encoder_save_dirty_entries, 0, sizeof(encoder_save_dirty_entries));
 
-            encoder_save_dirty_entries[layer_index][encoder_id] = entry;
+    for (size_t slot = 0; slot < ARRAY_SIZE(encoder_entries); slot++) {
+        struct rawhid_app_encoder_entry *entry = &encoder_entries[slot];
+        if (!entry->occupied) {
+            continue;
+        }
+
+        bool tombstone = !rawhid_app_encoder_runtime_layer_exists(entry->layer_id);
+        if (!tombstone && !entry->runtime_dirty && !entry->delete_pending) {
+            continue;
+        }
+
+        encoder_save_dirty_entries[encoder_save_dirty_entry_count++] = entry;
+    }
+
+    for (size_t index = 0; index < encoder_save_dirty_entry_count; index++) {
+        int rc = encoder_runtime_persist_entry(encoder_save_dirty_entries[index]);
+        if (rc < 0) {
+            memset(encoder_save_dirty_entries, 0, sizeof(encoder_save_dirty_entries));
+            encoder_save_dirty_entry_count = 0;
+            return rc;
         }
     }
 
-    for (uint8_t layer_index = 0; layer_index < ZMK_KEYMAP_LAYERS_LEN; layer_index++) {
-        for (uint8_t encoder_id = 0; encoder_id < ZMK_KEYMAP_SENSORS_LEN; encoder_id++) {
-            struct rawhid_app_encoder_entry *entry =
-                encoder_save_dirty_entries[layer_index][encoder_id];
-            if (entry == NULL) {
-                continue;
-            }
-
-            int rc = encoder_runtime_persist_entry(entry);
-            if (rc < 0) {
-                memset(encoder_save_dirty_entries, 0, sizeof(encoder_save_dirty_entries));
-                return rc;
-            }
-        }
-    }
-
-    for (uint8_t layer_index = 0; layer_index < ZMK_KEYMAP_LAYERS_LEN; layer_index++) {
-        for (uint8_t encoder_id = 0; encoder_id < ZMK_KEYMAP_SENSORS_LEN; encoder_id++) {
-            struct rawhid_app_encoder_entry *entry =
-                encoder_save_dirty_entries[layer_index][encoder_id];
-            if (entry != NULL) {
-                encoder_runtime_finalize_saved_entry(entry);
-            }
+    for (size_t index = 0; index < encoder_save_dirty_entry_count; index++) {
+        struct rawhid_app_encoder_entry *entry = encoder_save_dirty_entries[index];
+        if (rawhid_app_encoder_runtime_layer_exists(entry->layer_id)) {
+            encoder_runtime_finalize_saved_entry(entry);
+        } else {
+            encoder_runtime_release_entry(entry);
         }
     }
 
     memset(encoder_save_dirty_entries, 0, sizeof(encoder_save_dirty_entries));
+    encoder_save_dirty_entry_count = 0;
     return 0;
 }
 
 void rawhid_app_encoder_runtime_discard(void) {
-    for (uint8_t layer_index = 0; layer_index < ZMK_KEYMAP_LAYERS_LEN; layer_index++) {
-        for (uint8_t encoder_id = 0; encoder_id < ZMK_KEYMAP_SENSORS_LEN; encoder_id++) {
-            struct rawhid_app_encoder_entry *entry =
-                encoder_runtime_entry_by_index(layer_index, encoder_id);
-            if (entry == NULL) {
-                continue;
-            }
-
-            if (entry->saved_state == RAWHID_APP_ENCODER_SAVED_VALID) {
-                entry->runtime_cw_binding = entry->saved_cw_binding;
-                entry->runtime_ccw_binding = entry->saved_ccw_binding;
-                entry->runtime_valid = true;
-            } else {
-                memset(&entry->runtime_cw_binding, 0, sizeof(entry->runtime_cw_binding));
-                memset(&entry->runtime_ccw_binding, 0, sizeof(entry->runtime_ccw_binding));
-                entry->runtime_valid = false;
-            }
-            entry->runtime_dirty = false;
-            entry->delete_pending = false;
+    for (size_t slot = 0; slot < ARRAY_SIZE(encoder_entries); slot++) {
+        struct rawhid_app_encoder_entry *entry = &encoder_entries[slot];
+        if (!entry->occupied) {
+            continue;
         }
+
+        if (!rawhid_app_encoder_runtime_layer_exists(entry->layer_id)) {
+            if (entry->saved_state == RAWHID_APP_ENCODER_SAVED_NONE &&
+                !entry->pending_saved_record) {
+                encoder_runtime_release_entry(entry);
+            } else {
+                entry->runtime_valid = false;
+                entry->runtime_dirty = true;
+                entry->delete_pending = false;
+                encoder_runtime_reset_accumulators(entry);
+            }
+            continue;
+        }
+
+        if (entry->saved_state == RAWHID_APP_ENCODER_SAVED_VALID) {
+            entry->runtime_cw_binding = entry->saved_cw_binding;
+            entry->runtime_ccw_binding = entry->saved_ccw_binding;
+            entry->runtime_valid = true;
+        } else {
+            memset(&entry->runtime_cw_binding, 0, sizeof(entry->runtime_cw_binding));
+            memset(&entry->runtime_ccw_binding, 0, sizeof(entry->runtime_ccw_binding));
+            entry->runtime_valid = false;
+        }
+        encoder_runtime_reset_accumulators(entry);
+        entry->runtime_dirty = false;
+        entry->delete_pending = false;
     }
 }
 
@@ -552,6 +673,7 @@ void rawhid_app_encoder_runtime_clear(uint32_t layer_id, uint8_t encoder_id) {
     entry->runtime_valid = false;
     entry->runtime_dirty = true;
     entry->delete_pending = entry->saved_state != RAWHID_APP_ENCODER_SAVED_NONE;
+    encoder_runtime_reset_accumulators(entry);
 }
 
 static bool encoder_runtime_parse_hex_component(const char *component, char prefix,
@@ -606,16 +728,20 @@ static int encoder_runtime_settings_set(const char *name, size_t len, settings_r
         return 0;
     }
 
-    struct rawhid_app_encoder_entry *entry = encoder_runtime_entry(layer_id, encoder_id);
-    if (entry == NULL) {
-        LOG_WRN("encoder override ignored for unknown layer_id=%u encoder_id=%u", layer_id,
-                encoder_id);
+    if (encoder_id >= ZMK_KEYMAP_SENSORS_LEN) {
+        LOG_WRN("encoder override ignored for invalid encoder_id=%u layer_id=%u", encoder_id,
+                layer_id);
         return 0;
     }
 
+    struct rawhid_app_encoder_entry *entry =
+        encoder_runtime_find_or_allocate_entry(layer_id, encoder_id);
+    if (entry == NULL) {
+        return -ENOMEM;
+    }
+
     if (len == 0) {
-        entry->saved_state = RAWHID_APP_ENCODER_SAVED_NONE;
-        entry->pending_saved_record = false;
+        encoder_runtime_release_entry(entry);
         return 0;
     }
 
@@ -641,36 +767,41 @@ static int encoder_runtime_settings_set(const char *name, size_t len, settings_r
 }
 
 static int encoder_runtime_settings_commit(void) {
-    for (uint8_t layer_index = 0; layer_index < ZMK_KEYMAP_LAYERS_LEN; layer_index++) {
-        for (uint8_t encoder_id = 0; encoder_id < ZMK_KEYMAP_SENSORS_LEN; encoder_id++) {
-            struct rawhid_app_encoder_entry *entry =
-                encoder_runtime_entry_by_index(layer_index, encoder_id);
-            if (entry == NULL || !entry->pending_saved_record) {
-                continue;
-            }
+    encoder_runtime_settings_committed = true;
 
-            struct zmk_behavior_binding cw_binding;
-            struct zmk_behavior_binding ccw_binding;
-            enum rawhid_app_encoder_saved_state saved_state = encoder_runtime_decode_record(
-                entry->saved_record, &cw_binding, &ccw_binding);
+    for (size_t slot = 0; slot < ARRAY_SIZE(encoder_entries); slot++) {
+        struct rawhid_app_encoder_entry *entry = &encoder_entries[slot];
+        if (!entry->occupied || !entry->pending_saved_record) {
+            continue;
+        }
 
-            entry->saved_state = saved_state;
-            if (saved_state == RAWHID_APP_ENCODER_SAVED_VALID) {
-                entry->saved_cw_binding = cw_binding;
-                entry->saved_ccw_binding = ccw_binding;
+        struct zmk_behavior_binding cw_binding;
+        struct zmk_behavior_binding ccw_binding;
+        enum rawhid_app_encoder_saved_state saved_state = encoder_runtime_decode_record(
+            entry->saved_record, &cw_binding, &ccw_binding);
+
+        entry->saved_state = saved_state;
+        bool layer_exists = rawhid_app_encoder_runtime_layer_exists(entry->layer_id);
+        if (saved_state == RAWHID_APP_ENCODER_SAVED_VALID) {
+            entry->saved_cw_binding = cw_binding;
+            entry->saved_ccw_binding = ccw_binding;
+            if (layer_exists) {
                 entry->runtime_cw_binding = cw_binding;
                 entry->runtime_ccw_binding = ccw_binding;
                 entry->runtime_valid = true;
             } else {
-                memset(&entry->saved_cw_binding, 0, sizeof(entry->saved_cw_binding));
-                memset(&entry->saved_ccw_binding, 0, sizeof(entry->saved_ccw_binding));
                 entry->runtime_valid = false;
             }
-
-            entry->runtime_dirty = false;
-            entry->delete_pending = false;
-            entry->pending_saved_record = false;
+        } else {
+            memset(&entry->saved_cw_binding, 0, sizeof(entry->saved_cw_binding));
+            memset(&entry->saved_ccw_binding, 0, sizeof(entry->saved_ccw_binding));
+            entry->runtime_valid = false;
         }
+        encoder_runtime_reset_accumulators(entry);
+
+        entry->runtime_dirty = !layer_exists;
+        entry->delete_pending = false;
+        entry->pending_saved_record = false;
     }
 
     return 0;
@@ -706,6 +837,43 @@ static enum rawhid_app_encoder_direction encoder_runtime_direction_from_steps(in
     return RAWHID_APP_ENCODER_DIRECTION_NONE;
 }
 
+static int encoder_runtime_triggers_from_sensor_event(struct rawhid_app_encoder_entry *entry,
+                                                      const struct zmk_sensor_event *sensor_ev) {
+    if (sensor_ev->channel_data_size == 0) {
+        return 0;
+    }
+
+    const struct sensor_value value = sensor_ev->channel_data[0].value;
+
+    /* Match ZMK's sensor rotate conversion so keyboard firmware settings decide
+     * the physical detent-to-trigger mapping.
+     */
+    if (value.val1 == 0) {
+        return value.val2;
+    }
+
+    const struct zmk_sensor_config *sensor_config =
+        zmk_sensors_get_config_at_index(sensor_ev->sensor_index);
+    if (sensor_config == NULL || sensor_config->triggers_per_rotation == 0 ||
+        sensor_config->triggers_per_rotation > 360) {
+        return encoder_runtime_signed_steps(sensor_ev);
+    }
+
+    entry->sensor_remainder.val1 += value.val1;
+    entry->sensor_remainder.val2 += value.val2;
+
+    if (abs(entry->sensor_remainder.val2) >= 1000000) {
+        entry->sensor_remainder.val1 += entry->sensor_remainder.val2 / 1000000;
+        entry->sensor_remainder.val2 %= 1000000;
+    }
+
+    int trigger_degrees = 360 / sensor_config->triggers_per_rotation;
+    int triggers = entry->sensor_remainder.val1 / trigger_degrees;
+    entry->sensor_remainder.val1 %= trigger_degrees;
+
+    return triggers;
+}
+
 static const char *encoder_runtime_direction_name(enum rawhid_app_encoder_direction direction) {
     switch (direction) {
     case RAWHID_APP_ENCODER_DIRECTION_CW:
@@ -730,9 +898,107 @@ encoder_runtime_binding_for_direction(const struct rawhid_app_encoder_entry *ent
     }
 }
 
+#if DT_HAS_COMPAT_STATUS_OKAY(zmk_behavior_input_two_axis)
+static const struct rawhid_app_encoder_two_axis_target *
+encoder_runtime_two_axis_target(const struct zmk_behavior_binding *binding) {
+    if (binding == NULL || binding->behavior_dev == NULL) {
+        return NULL;
+    }
+
+    for (size_t i = 0; i < ARRAY_SIZE(encoder_two_axis_targets); i++) {
+        const struct rawhid_app_encoder_two_axis_target *target = &encoder_two_axis_targets[i];
+        if (device_is_ready(target->dev) && strcmp(binding->behavior_dev, target->dev->name) == 0) {
+            return target;
+        }
+    }
+
+    return NULL;
+}
+
+static int16_t encoder_runtime_decode_move_x(uint32_t param) {
+    return (int16_t)((param >> 16) & 0xffff);
+}
+
+static int16_t encoder_runtime_decode_move_y(uint32_t param) {
+    return (int16_t)(param & 0xffff);
+}
+
+static int16_t encoder_runtime_discrete_pointer_delta(uint16_t code, int16_t value,
+                                                      uint8_t multiplier, int16_t *remainder) {
+    if (value == 0 || multiplier == 0) {
+        return 0;
+    }
+
+    int32_t delta;
+    switch (code) {
+    case INPUT_REL_WHEEL:
+    case INPUT_REL_HWHEEL:
+        if (remainder == NULL) {
+            return 0;
+        }
+        *remainder += (value > 0 ? 1 : -1) * multiplier;
+        delta = *remainder / RAWHID_APP_ENCODER_SCROLL_DETENTS_PER_NOTCH;
+        *remainder %= RAWHID_APP_ENCODER_SCROLL_DETENTS_PER_NOTCH;
+        return (int16_t)CLAMP(delta, INT16_MIN, INT16_MAX);
+    default:
+        delta = value / RAWHID_APP_ENCODER_POINTER_MOVE_DIVISOR;
+        if (delta == 0) {
+            delta = value > 0 ? 1 : -1;
+        }
+        break;
+    }
+
+    delta *= multiplier;
+    return (int16_t)CLAMP(delta, INT16_MIN, INT16_MAX);
+}
+
+static bool encoder_runtime_report_two_axis(const struct zmk_behavior_binding *binding,
+                                            struct rawhid_app_encoder_entry *entry, int steps) {
+    const struct rawhid_app_encoder_two_axis_target *target =
+        encoder_runtime_two_axis_target(binding);
+    if (target == NULL) {
+        return false;
+    }
+
+    uint8_t multiplier = (uint8_t)MIN(abs(steps), UINT8_MAX);
+    int16_t x_value = encoder_runtime_decode_move_x(binding->param1);
+    int16_t y_value = encoder_runtime_decode_move_y(binding->param1);
+    int16_t x_delta =
+        encoder_runtime_discrete_pointer_delta(target->x_code, x_value, multiplier,
+                                               &entry->two_axis_x_remainder);
+    int16_t y_delta =
+        encoder_runtime_discrete_pointer_delta(target->y_code, y_value, multiplier,
+                                               &entry->two_axis_y_remainder);
+
+    bool have_x = x_delta != 0;
+    bool have_y = y_delta != 0;
+    int err = 0;
+
+    if (have_x) {
+        err = input_report_rel(target->dev, target->x_code, x_delta, !have_y, K_NO_WAIT);
+        if (err < 0) {
+            return true;
+        }
+    }
+
+    if (have_y) {
+        input_report_rel(target->dev, target->y_code, y_delta, true, K_NO_WAIT);
+    }
+
+    return true;
+}
+#endif
+
 static int encoder_runtime_invoke_binding(const struct zmk_behavior_binding *binding,
+                                          struct rawhid_app_encoder_entry *entry,
                                           uint8_t layer_id, uint8_t encoder_id,
-                                          int64_t timestamp) {
+                                          int steps, int64_t timestamp) {
+#if DT_HAS_COMPAT_STATUS_OKAY(zmk_behavior_input_two_axis)
+    if (encoder_runtime_report_two_axis(binding, entry, steps)) {
+        return 0;
+    }
+#endif
+
     struct zmk_behavior_binding_event event = {
         .layer = layer_id,
         .position = ZMK_VIRTUAL_KEY_POSITION_SENSOR(encoder_id),
@@ -757,16 +1023,15 @@ static int encoder_runtime_listener(const zmk_event_t *eh) {
     }
 
     uint8_t encoder_id = sensor_ev->sensor_index;
-    int steps = encoder_runtime_signed_steps(sensor_ev);
-    enum rawhid_app_encoder_direction direction = encoder_runtime_direction_from_steps(steps);
+    int raw_steps = encoder_runtime_signed_steps(sensor_ev);
     zmk_keymap_layer_index_t active_layer_index = zmk_keymap_highest_layer_active();
     zmk_keymap_layer_id_t active_layer_id = zmk_keymap_layer_index_to_id(active_layer_index);
 
     if (encoder_id >= ZMK_KEYMAP_SENSORS_LEN) {
         LOG_WRN("encoder runtime invalid sensor_index=%u layer_index=%u layer_id=%u steps=%d "
                 "direction=%s",
-                encoder_id, active_layer_index, active_layer_id, steps,
-                encoder_runtime_direction_name(direction));
+                encoder_id, active_layer_index, active_layer_id, raw_steps,
+                encoder_runtime_direction_name(encoder_runtime_direction_from_steps(raw_steps)));
         return ZMK_EV_EVENT_BUBBLE;
     }
 
@@ -776,11 +1041,7 @@ static int encoder_runtime_listener(const zmk_event_t *eh) {
         return ZMK_EV_EVENT_BUBBLE;
     }
 
-    LOG_INF("encoder runtime sensor_index=%u layer_index=%u layer_id=%u steps=%d direction=%s",
-            encoder_id, active_layer_index, active_layer_id, steps,
-            encoder_runtime_direction_name(direction));
-
-    if (direction == RAWHID_APP_ENCODER_DIRECTION_NONE) {
+    if (encoder_runtime_direction_from_steps(raw_steps) == RAWHID_APP_ENCODER_DIRECTION_NONE) {
         return ZMK_EV_EVENT_BUBBLE;
     }
 
@@ -790,18 +1051,32 @@ static int encoder_runtime_listener(const zmk_event_t *eh) {
         return ZMK_EV_EVENT_BUBBLE;
     }
 
+    int triggers = encoder_runtime_triggers_from_sensor_event(entry, sensor_ev);
+    enum rawhid_app_encoder_direction direction = encoder_runtime_direction_from_steps(triggers);
+
+    LOG_INF("encoder runtime sensor_index=%u layer_index=%u layer_id=%u raw_steps=%d triggers=%d "
+            "direction=%s",
+            encoder_id, active_layer_index, active_layer_id, raw_steps, triggers,
+            encoder_runtime_direction_name(direction));
+
+    if (direction == RAWHID_APP_ENCODER_DIRECTION_NONE) {
+        return ZMK_EV_EVENT_HANDLED;
+    }
+
     const struct zmk_behavior_binding *binding =
         encoder_runtime_binding_for_direction(entry, direction);
     if (binding == NULL) {
         return ZMK_EV_EVENT_BUBBLE;
     }
 
-    int err = encoder_runtime_invoke_binding(binding, active_layer_id, encoder_id,
-                                             sensor_ev->timestamp);
-    if (err < 0) {
-        LOG_WRN("encoder runtime invoke failed sensor_index=%u layer_id=%u direction=%s err=%d",
-                encoder_id, active_layer_id, encoder_runtime_direction_name(direction), err);
-        return err;
+    for (uint8_t i = 0; i < MIN(abs(triggers), UINT8_MAX); i++) {
+        int err = encoder_runtime_invoke_binding(binding, entry, active_layer_id, encoder_id,
+                                                 triggers > 0 ? 1 : -1, sensor_ev->timestamp);
+        if (err < 0) {
+            LOG_WRN("encoder runtime invoke failed sensor_index=%u layer_id=%u direction=%s err=%d",
+                    encoder_id, active_layer_id, encoder_runtime_direction_name(direction), err);
+            return err;
+        }
     }
 
     LOG_INF("encoder runtime handled sensor_index=%u layer_id=%u direction=%s", encoder_id,

@@ -1,4 +1,5 @@
 #include <stdbool.h>
+#include <errno.h>
 #include <stdint.h>
 #include <string.h>
 
@@ -86,9 +87,28 @@ static uint8_t hello_response[RAWHID_APP_PACKET_SIZE];
 static uint8_t config_response[RAWHID_APP_PACKET_SIZE];
 
 static atomic_t config_encoder_save_pending;
-static uint8_t config_encoder_save_seq;
-static uint8_t config_encoder_save_feature;
-static uint8_t config_encoder_save_op;
+
+struct config_request_identity {
+    bool valid;
+    uint8_t seq;
+    uint8_t feature;
+    uint8_t op;
+    uint8_t flags;
+    uint8_t payload_len;
+    uint8_t payload[RAWHID_APP_PAYLOAD_SIZE];
+};
+
+struct config_response_cache {
+    struct config_request_identity request;
+    int64_t expires_at;
+    uint8_t response[RAWHID_APP_PACKET_SIZE];
+};
+
+static struct config_request_identity config_encoder_save_request;
+static struct config_request_identity config_response_request;
+static struct config_response_cache config_response_cache;
+
+#define RAWHID_APP_CONFIG_RESPONSE_CACHE_TTL_MS 1000
 
 static bool reserved_bytes_are_zero(const uint8_t *data, uint8_t start, uint8_t end_inclusive) {
     for (uint8_t i = start; i <= end_inclusive; i++) {
@@ -216,6 +236,73 @@ static bool parse_config_request_packet(const uint8_t *data, struct rawhid_app_p
     return true;
 }
 
+static void config_request_identity_capture(const struct rawhid_app_packet *packet,
+                                            struct config_request_identity *identity) {
+    memset(identity, 0, sizeof(*identity));
+    identity->valid = true;
+    identity->seq = packet->config_request.seq;
+    identity->feature = packet->config_request.feature;
+    identity->op = packet->config_request.op;
+    identity->flags = packet->config_request.flags;
+    identity->payload_len = packet->config_request.payload_len;
+    if (packet->config_request.payload_len > 0) {
+        memcpy(identity->payload, packet->config_request.payload,
+               packet->config_request.payload_len);
+    }
+}
+
+static bool config_request_identity_matches_packet(
+    const struct config_request_identity *identity, const struct rawhid_app_packet *packet) {
+    if (!identity->valid || identity->seq != packet->config_request.seq ||
+        identity->feature != packet->config_request.feature ||
+        identity->op != packet->config_request.op ||
+        identity->flags != packet->config_request.flags ||
+        identity->payload_len != packet->config_request.payload_len) {
+        return false;
+    }
+
+    return identity->payload_len == 0 ||
+           memcmp(identity->payload, packet->config_request.payload, identity->payload_len) == 0;
+}
+
+static bool config_request_same_seq_different_payload(
+    const struct config_request_identity *identity, const struct rawhid_app_packet *packet) {
+    return identity->valid && identity->seq == packet->config_request.seq &&
+           !config_request_identity_matches_packet(identity, packet);
+}
+
+static bool config_response_cache_valid(void) {
+    return config_response_cache.request.valid &&
+           k_uptime_get() <= config_response_cache.expires_at;
+}
+
+static void config_response_cache_store(const uint8_t response[RAWHID_APP_PACKET_SIZE]) {
+    if (!config_response_request.valid) {
+        return;
+    }
+
+    config_response_cache.request = config_response_request;
+    config_response_cache.expires_at =
+        k_uptime_get() + RAWHID_APP_CONFIG_RESPONSE_CACHE_TTL_MS;
+    memcpy(config_response_cache.response, response, RAWHID_APP_PACKET_SIZE);
+}
+
+static bool config_response_cache_try_resend(const struct rawhid_app_packet *packet) {
+    if (!config_response_cache_valid()) {
+        return false;
+    }
+
+    if (!config_request_identity_matches_packet(&config_response_cache.request, packet)) {
+        return false;
+    }
+
+    raise_raw_hid_sent_event((struct raw_hid_sent_event){
+        .data = config_response_cache.response,
+        .length = sizeof(config_response_cache.response),
+    });
+    return true;
+}
+
 static bool parse_packet(const struct raw_hid_received_event *event,
                          struct rawhid_app_packet *packet) {
     if (event == NULL || event->data == NULL || event->length != RAWHID_APP_PACKET_SIZE) {
@@ -327,6 +414,8 @@ static void send_config_response(uint8_t seq, uint8_t feature, uint8_t op,
         memcpy(&config_response[RAWHID_APP_OFFSET_PAYLOAD], payload, payload_len);
     }
 
+    config_response_cache_store(config_response);
+
     raise_raw_hid_sent_event((struct raw_hid_sent_event){
         .data = config_response,
         .length = sizeof(config_response),
@@ -354,7 +443,12 @@ static bool config_encoder_decode_binding(const uint8_t *data,
     binding->local_id = behavior_id;
 #endif
 
-    return zmk_behavior_validate_binding(binding) == 0;
+    int rc = zmk_behavior_validate_binding(binding);
+    if (rc == -ENODEV && zmk_behavior_get_binding(behavior_dev) != NULL) {
+        return true;
+    }
+
+    return rc == 0;
 }
 
 static bool config_encoder_encode_binding(const struct zmk_behavior_binding *binding,
@@ -475,7 +569,10 @@ static void handle_config_encoder_set_bindings(const struct rawhid_app_packet *p
         return;
     }
 
-    rawhid_app_encoder_runtime_set(layer_id, encoder_id, &cw_binding, &ccw_binding);
+    if (rawhid_app_encoder_runtime_set(layer_id, encoder_id, &cw_binding, &ccw_binding) < 0) {
+        send_config_response(seq, feature, op, RAWHID_APP_CONFIG_STATUS_INTERNAL_ERROR, NULL, 0);
+        return;
+    }
     send_config_response(seq, feature, op, RAWHID_APP_CONFIG_STATUS_OK, NULL, 0);
 }
 
@@ -499,11 +596,13 @@ static void config_encoder_save_work_handler(struct k_work *work) {
     ARG_UNUSED(work);
 
     int rc = rawhid_app_encoder_runtime_save();
-    send_config_response(config_encoder_save_seq, config_encoder_save_feature,
-                         config_encoder_save_op,
+    config_response_request = config_encoder_save_request;
+    send_config_response(config_encoder_save_request.seq, config_encoder_save_request.feature,
+                         config_encoder_save_request.op,
                          rc < 0 ? RAWHID_APP_CONFIG_STATUS_STORAGE_ERROR
                                 : RAWHID_APP_CONFIG_STATUS_OK,
                          NULL, 0);
+    config_encoder_save_request.valid = false;
     atomic_clear(&config_encoder_save_pending);
 }
 
@@ -520,13 +619,15 @@ static void handle_config_encoder_save(const struct rawhid_app_packet *packet) {
     }
 
     if (!atomic_cas(&config_encoder_save_pending, 0, 1)) {
-        send_config_response(seq, feature, op, RAWHID_APP_CONFIG_STATUS_INTERNAL_ERROR, NULL, 0);
+        if (config_request_identity_matches_packet(&config_encoder_save_request, packet)) {
+            return;
+        }
+
+        send_config_response(seq, feature, op, RAWHID_APP_CONFIG_STATUS_BUSY, NULL, 0);
         return;
     }
 
-    config_encoder_save_seq = seq;
-    config_encoder_save_feature = feature;
-    config_encoder_save_op = op;
+    config_request_identity_capture(packet, &config_encoder_save_request);
     k_work_submit(&config_encoder_save_work);
 }
 
@@ -573,6 +674,33 @@ static void handle_config_request(const struct rawhid_app_packet *packet) {
     uint8_t seq = packet->config_request.seq;
     uint8_t feature = packet->config_request.feature;
     uint8_t op = packet->config_request.op;
+
+    if (config_response_cache_try_resend(packet)) {
+        return;
+    }
+
+    if (config_response_cache_valid() &&
+        config_request_same_seq_different_payload(&config_response_cache.request, packet)) {
+        config_request_identity_capture(packet, &config_response_request);
+        send_config_response(seq, feature, op, RAWHID_APP_CONFIG_STATUS_BAD_PACKET, NULL, 0);
+        return;
+    }
+
+    if (atomic_get(&config_encoder_save_pending) != 0) {
+        config_request_identity_capture(packet, &config_response_request);
+
+        if (config_request_same_seq_different_payload(&config_encoder_save_request, packet)) {
+            send_config_response(seq, feature, op, RAWHID_APP_CONFIG_STATUS_BAD_PACKET, NULL, 0);
+            return;
+        }
+
+        if (op != RAWHID_APP_CONFIG_OP_SAVE) {
+            send_config_response(seq, feature, op, RAWHID_APP_CONFIG_STATUS_BUSY, NULL, 0);
+            return;
+        }
+    }
+
+    config_request_identity_capture(packet, &config_response_request);
 
     if (packet->config_request.flags != 0) {
         send_config_response(seq, feature, op, RAWHID_APP_CONFIG_STATUS_BAD_PACKET, NULL, 0);
