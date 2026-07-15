@@ -93,6 +93,24 @@ CONFIG_RAWHID_APP_CONFIG_RPC=y
 | `RAWHID_APP_COMBO_RUNTIME` | Keylink runtime Combo engine。`/combos` を `status = "disabled"` にして有効化 |
 | `RAWHID_APP_COMBO_SETTINGS` | Combo Settings table をNVSへ保存・読込。Combo runtimeとConfig RPCが必要 |
 
+`CONFIG_RAWHID_APP_COMBO_RUNTIME=y` を有効にする場合は、キーボードの `.keymap` ファイルで
+`/combos` を次のように `status = "disabled"` にしてください。
+
+```dts
+/ {
+    combos {
+        compatible = "zmk,combos";
+        status = "disabled";
+
+        // Combo の子ノード定義
+    };
+};
+```
+
+これは ZMK 標準の Combo listener を生成させず、ZMK 標準と Keylink runtime の両方が同じ
+キーイベントを処理することを防ぐためです。ノードを削除するのではなく無効化することで、`/combos` の
+子ノードは Devicetree 上に残り、Keylink runtime が読み取り専用の初期 Combo 定義として利用できます。
+
 ---
 
 ## 各機能の使い方
