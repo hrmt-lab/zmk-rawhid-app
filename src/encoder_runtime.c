@@ -14,8 +14,6 @@
 #include <zephyr/sys/crc.h>
 #include <zephyr/sys/util.h>
 
-#include <tinycrypt/sha256.h>
-
 #include <drivers/behavior.h>
 #include <zmk/behavior.h>
 #include <zmk/event_manager.h>
@@ -26,6 +24,7 @@
 #include <zmk/virtual_key_position.h>
 
 #include <rawhid_app/encoder_runtime.h>
+#include <rawhid_app/behavior_identity.h>
 
 LOG_MODULE_DECLARE(zmk, CONFIG_ZMK_LOG_LEVEL);
 
@@ -50,7 +49,6 @@ LOG_MODULE_DECLARE(zmk, CONFIG_ZMK_LOG_LEVEL);
 #define RAWHID_APP_ENCODER_RECORD_MAGIC_1 'E'
 #define RAWHID_APP_ENCODER_RECORD_VERSION 1
 #define RAWHID_APP_ENCODER_RECORD_HASH_LEN 16
-#define RAWHID_APP_ENCODER_IDENTITY_SCHEMA_VERSION 1
 #define RAWHID_APP_ENCODER_POINTER_MOVE_DIVISOR 20
 #define RAWHID_APP_ENCODER_SCROLL_DETENTS_PER_NOTCH 2
 
@@ -386,38 +384,9 @@ static bool encoder_runtime_decode_binding(const uint8_t *data, const char *dire
     return true;
 }
 
-static void encoder_runtime_hash_update_u8(struct tc_sha256_state_struct *sha, uint8_t value) {
-    tc_sha256_update(sha, &value, sizeof(value));
-}
-
-static void encoder_runtime_hash_update_string(struct tc_sha256_state_struct *sha,
-                                               const char *value) {
-    uint16_t len = value == NULL ? 0 : (uint16_t)strlen(value);
-    uint8_t len_bytes[2];
-    sys_put_le16(len, len_bytes);
-    tc_sha256_update(sha, len_bytes, sizeof(len_bytes));
-    if (len > 0) {
-        tc_sha256_update(sha, (const uint8_t *)value, len);
-    }
-}
-
 static void encoder_runtime_identity_hash(const struct zmk_behavior_binding *binding,
                                           uint8_t hash[RAWHID_APP_ENCODER_RECORD_HASH_LEN]) {
-    struct tc_sha256_state_struct sha;
-    uint8_t digest[TC_SHA256_DIGEST_SIZE];
-
-    /* ZMK does not expose a stable runtime compatible string for arbitrary
-     * behavior devices. Record v1 therefore hashes only the stable MVP fields.
-     */
-    tc_sha256_init(&sha);
-    encoder_runtime_hash_update_u8(&sha, RAWHID_APP_ENCODER_IDENTITY_SCHEMA_VERSION);
-    encoder_runtime_hash_update_string(&sha, binding->behavior_dev);
-    encoder_runtime_hash_update_u8(&sha, 2);
-    encoder_runtime_hash_update_string(&sha, "");
-    encoder_runtime_hash_update_string(&sha, "");
-    tc_sha256_final(digest, &sha);
-
-    memcpy(hash, digest, RAWHID_APP_ENCODER_RECORD_HASH_LEN);
+    rawhid_app_behavior_identity_hash(binding, hash, RAWHID_APP_ENCODER_RECORD_HASH_LEN);
 }
 
 static bool encoder_runtime_hash_matches(const struct zmk_behavior_binding *binding,

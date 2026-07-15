@@ -82,7 +82,43 @@ config RAWHID_APP_CONFIG_RPC
     select TINYCRYPT
     select TINYCRYPT_SHA256
     help
-      Handle Host Link CONFIG_REQUEST / CONFIG_RESPONSE packets. The initial
-      encoder implementation supports GET_INFO, GET_BINDINGS, SET_BINDINGS,
-      GET_DIRTY, SAVE, DISCARD, and CLEAR_OVERRIDE. SAVE requires a working
-      settings backend in the keyboard configuration.
+      Handle Host Link CONFIG_REQUEST / CONFIG_RESPONSE packets. The encoder
+      implementation supports GET_INFO, GET_BINDINGS, SET_BINDINGS, GET_DIRTY,
+      SAVE, DISCARD, and CLEAR_OVERRIDE. SAVE requires a working settings
+      backend in the keyboard configuration. When RAWHID_APP_COMBO_RUNTIME is
+      enabled, the Combo feature additionally provides read-only GET_INFO and
+      GET_COMBO operations.
+
+config RAWHID_APP_COMBO_RUNTIME
+    bool "Enable Keylink runtime Combo engine"
+    help
+      Replace the ZMK devicetree Combo listener with the Keylink runtime Combo
+      engine. The /combos node must exist and have status = "disabled" so ZMK's
+      built-in listener is absent while its child definitions remain available
+      as Keylink's read-only defaults.
+
+config RAWHID_APP_COMBO_SETTINGS_CORE
+    bool
+    depends on RAWHID_APP_COMBO_RUNTIME
+
+config RAWHID_APP_COMBO_SETTINGS
+    bool "Enable Keylink Combo Settings table"
+    depends on RAWHID_APP_COMBO_RUNTIME && RAWHID_APP_CONFIG_RPC && NVS
+    select RAWHID_APP_COMBO_SETTINGS_CORE
+    select TINYCRYPT
+    select TINYCRYPT_SHA256
+    help
+      Load the fixed 2,064 byte Keylink Combo table from
+      keylink/cmb/v1/table. This option is deliberately limited to the
+      Zephyr NVS Settings backend: record version 1 depends on a single NVS
+      value being atomically replaced. Runtime Combo remains usable without
+      this option, in which case CONFIG RPC reports STORAGE_UNAVAILABLE.
+
+config RAWHID_APP_COMBO_SETTINGS_TEST
+    bool
+    default n
+    depends on RAWHID_APP_COMBO_RUNTIME && NATIVE_SIM
+    select RAWHID_APP_COMBO_SETTINGS_CORE
+    help
+      Internal native-fixture switch. It deliberately has no prompt and must
+      only be enabled by the Combo Settings test configuration.

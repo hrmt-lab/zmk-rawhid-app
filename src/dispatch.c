@@ -17,6 +17,9 @@
 #include <zephyr/sys/util.h>
 
 #include <rawhid_app/encoder_runtime.h>
+#if IS_ENABLED(CONFIG_RAWHID_APP_COMBO_RUNTIME)
+#include <rawhid_app/combo_runtime.h>
+#endif
 #include <rawhid_app/packet.h>
 #include <rawhid_app/identity.h>
 #include <rawhid_app/uplink.h>
@@ -80,8 +83,30 @@
 #define RAWHID_APP_CONFIG_ENCODER_FLAG_INVALID_SAVED_EXISTS BIT(3)
 #define RAWHID_APP_CONFIG_ENCODER_INVALID_BEHAVIOR_ID UINT16_MAX
 
+/* CONFIG_RPC COMBO payload offsets. */
+#define RAWHID_APP_CONFIG_COMBO_GET_INFO_RESPONSE_LEN 16
+#define RAWHID_APP_CONFIG_COMBO_GET_COMBO_REQUEST_LEN 1
+#define RAWHID_APP_CONFIG_COMBO_ITEM_LEN 52
+#define RAWHID_APP_CONFIG_COMBO_SLOT_ID 0
+#define RAWHID_APP_CONFIG_COMBO_KEY_COUNT_FLAGS 1
+#define RAWHID_APP_CONFIG_COMBO_NAME 2
+#define RAWHID_APP_CONFIG_COMBO_NAME_LEN 16
+#define RAWHID_APP_CONFIG_COMBO_KEY_POSITIONS 18
+#define RAWHID_APP_CONFIG_COMBO_KEY_POSITION_LEN 2
+#define RAWHID_APP_CONFIG_COMBO_BINDING 34
+#define RAWHID_APP_CONFIG_COMBO_BINDING_LEN 10
+#define RAWHID_APP_CONFIG_COMBO_LAYER_MASK 44
+#define RAWHID_APP_CONFIG_COMBO_TIMEOUT_MS 48
+#define RAWHID_APP_CONFIG_COMBO_REQUIRE_PRIOR_IDLE_MS 50
+#define RAWHID_APP_CONFIG_COMBO_KEY_COUNT_MASK 0x0f
+#define RAWHID_APP_CONFIG_COMBO_SLOW_RELEASE BIT(4)
+#define RAWHID_APP_CONFIG_COMBO_UNUSED_KEY_POSITION UINT16_MAX
+#define RAWHID_APP_CONFIG_COMBO_INVALID_BEHAVIOR_ID UINT16_MAX
+
 BUILD_ASSERT(CONFIG_RAW_HID_REPORT_SIZE == RAWHID_APP_PACKET_SIZE,
              "rawhid-app requires 64 byte reports");
+BUILD_ASSERT(RAWHID_APP_CONFIG_COMBO_ITEM_LEN == RAWHID_APP_PAYLOAD_SIZE,
+             "Combo item must fill the Host Link payload");
 
 static uint8_t hello_response[RAWHID_APP_PACKET_SIZE];
 static uint8_t config_response[RAWHID_APP_PACKET_SIZE];
@@ -670,6 +695,136 @@ static void handle_config_encoder_clear_override(const struct rawhid_app_packet 
     send_config_response(seq, feature, op, RAWHID_APP_CONFIG_STATUS_OK, NULL, 0);
 }
 
+#if IS_ENABLED(CONFIG_RAWHID_APP_COMBO_RUNTIME)
+static void handle_config_combo_get_info(const struct rawhid_app_packet *packet) {
+    uint8_t seq = packet->config_request.seq;
+    uint8_t feature = packet->config_request.feature;
+    uint8_t op = packet->config_request.op;
+
+    if (packet->config_request.payload_len != 0) {
+        send_config_response(seq, feature, op, RAWHID_APP_CONFIG_STATUS_BAD_PACKET, NULL, 0);
+        return;
+    }
+
+    struct rawhid_app_combo_runtime_limits limits;
+    rawhid_app_combo_runtime_get_limits(&limits);
+    struct rawhid_app_combo_runtime_diagnostics diagnostics;
+    rawhid_app_combo_runtime_get_diagnostics(&diagnostics);
+
+    uint8_t payload[RAWHID_APP_CONFIG_COMBO_GET_INFO_RESPONSE_LEN] = {0};
+    payload[0] = limits.max_slots;
+    payload[1] = limits.max_keys;
+    payload[2] = limits.occupied_count;
+    payload[3] = diagnostics.flags;
+    sys_put_le32(rawhid_app_combo_runtime_occupied_mask(), &payload[4]);
+    sys_put_le32(diagnostics.stale_slots, &payload[8]);
+    sys_put_le32(diagnostics.invalid_slots, &payload[12]);
+    send_config_response(seq, feature, op, RAWHID_APP_CONFIG_STATUS_OK, payload, sizeof(payload));
+}
+
+static bool config_combo_encode_item(uint8_t slot,
+                                     const struct rawhid_app_combo_runtime_definition *definition,
+                                     uint8_t item[RAWHID_APP_CONFIG_COMBO_ITEM_LEN]) {
+    if (definition == NULL || definition->key_count < 2 ||
+        definition->key_count > RAWHID_APP_COMBO_RUNTIME_MAX_KEYS) {
+        return false;
+    }
+
+    memset(item, 0, RAWHID_APP_CONFIG_COMBO_ITEM_LEN);
+    item[RAWHID_APP_CONFIG_COMBO_SLOT_ID] = slot;
+    item[RAWHID_APP_CONFIG_COMBO_KEY_COUNT_FLAGS] =
+        definition->key_count & RAWHID_APP_CONFIG_COMBO_KEY_COUNT_MASK;
+    if (definition->slow_release) {
+        item[RAWHID_APP_CONFIG_COMBO_KEY_COUNT_FLAGS] |= RAWHID_APP_CONFIG_COMBO_SLOW_RELEASE;
+    }
+    memcpy(&item[RAWHID_APP_CONFIG_COMBO_NAME], definition->name,
+           RAWHID_APP_CONFIG_COMBO_NAME_LEN);
+
+    for (uint8_t index = 0; index < RAWHID_APP_COMBO_RUNTIME_MAX_KEYS; index++) {
+        uint16_t position = index < definition->key_count
+                                ? definition->key_positions[index]
+                                : RAWHID_APP_CONFIG_COMBO_UNUSED_KEY_POSITION;
+        sys_put_le16(position, &item[RAWHID_APP_CONFIG_COMBO_KEY_POSITIONS +
+                                     index * RAWHID_APP_CONFIG_COMBO_KEY_POSITION_LEN]);
+    }
+
+    zmk_behavior_local_id_t behavior_id =
+        zmk_behavior_get_local_id(definition->binding.behavior_dev);
+    if (behavior_id == RAWHID_APP_CONFIG_COMBO_INVALID_BEHAVIOR_ID) {
+        return false;
+    }
+    sys_put_le16(behavior_id, &item[RAWHID_APP_CONFIG_COMBO_BINDING]);
+    sys_put_le32(definition->binding.param1,
+                 &item[RAWHID_APP_CONFIG_COMBO_BINDING + 2]);
+    sys_put_le32(definition->binding.param2,
+                 &item[RAWHID_APP_CONFIG_COMBO_BINDING + 6]);
+    sys_put_le32(definition->layer_mask, &item[RAWHID_APP_CONFIG_COMBO_LAYER_MASK]);
+    sys_put_le16(definition->timeout_ms, &item[RAWHID_APP_CONFIG_COMBO_TIMEOUT_MS]);
+    sys_put_le16(definition->require_prior_idle_ms == 0
+                     ? UINT16_MAX
+                     : definition->require_prior_idle_ms,
+                 &item[RAWHID_APP_CONFIG_COMBO_REQUIRE_PRIOR_IDLE_MS]);
+    return true;
+}
+
+static void handle_config_combo_get_combo(const struct rawhid_app_packet *packet) {
+    uint8_t seq = packet->config_request.seq;
+    uint8_t feature = packet->config_request.feature;
+    uint8_t op = packet->config_request.op;
+
+    if (packet->config_request.payload_len != RAWHID_APP_CONFIG_COMBO_GET_COMBO_REQUEST_LEN) {
+        send_config_response(seq, feature, op, RAWHID_APP_CONFIG_STATUS_BAD_PACKET, NULL, 0);
+        return;
+    }
+
+    uint8_t slot = packet->config_request.payload[RAWHID_APP_CONFIG_COMBO_SLOT_ID];
+    struct rawhid_app_combo_runtime_limits limits;
+    rawhid_app_combo_runtime_get_limits(&limits);
+    if (slot >= limits.max_slots) {
+        send_config_response(seq, feature, op, RAWHID_APP_CONFIG_STATUS_INVALID_ARGUMENT, NULL,
+                             0);
+        return;
+    }
+
+    struct rawhid_app_combo_runtime_definition definition;
+    if (!rawhid_app_combo_runtime_get(slot, &definition)) {
+        uint8_t stale_item[RAWHID_APP_CONFIG_COMBO_ITEM_LEN];
+        if (rawhid_app_combo_runtime_get_stale_item(slot, stale_item)) {
+            send_config_response(seq, feature, op, RAWHID_APP_CONFIG_STATUS_OK, stale_item,
+                                 sizeof(stale_item));
+            return;
+        }
+        send_config_response(seq, feature, op, RAWHID_APP_CONFIG_STATUS_NOT_FOUND, NULL, 0);
+        return;
+    }
+
+    uint8_t item[RAWHID_APP_CONFIG_COMBO_ITEM_LEN];
+    if (!config_combo_encode_item(slot, &definition, item)) {
+        send_config_response(seq, feature, op, RAWHID_APP_CONFIG_STATUS_INTERNAL_ERROR, NULL,
+                             0);
+        return;
+    }
+
+    send_config_response(seq, feature, op, RAWHID_APP_CONFIG_STATUS_OK, item, sizeof(item));
+}
+
+static void handle_config_combo_request(const struct rawhid_app_packet *packet) {
+    switch (packet->config_request.op) {
+    case RAWHID_APP_CONFIG_COMBO_OP_GET_INFO:
+        handle_config_combo_get_info(packet);
+        break;
+    case RAWHID_APP_CONFIG_COMBO_OP_GET_COMBO:
+        handle_config_combo_get_combo(packet);
+        break;
+    default:
+        send_config_response(packet->config_request.seq, packet->config_request.feature,
+                             packet->config_request.op,
+                             RAWHID_APP_CONFIG_STATUS_UNSUPPORTED_OP, NULL, 0);
+        break;
+    }
+}
+#endif
+
 static void handle_config_request(const struct rawhid_app_packet *packet) {
     uint8_t seq = packet->config_request.seq;
     uint8_t feature = packet->config_request.feature;
@@ -707,36 +862,47 @@ static void handle_config_request(const struct rawhid_app_packet *packet) {
         return;
     }
 
-    if (feature != RAWHID_APP_CONFIG_FEATURE_ENCODER) {
+    switch (feature) {
+    case RAWHID_APP_CONFIG_FEATURE_ENCODER:
+        switch (op) {
+        case RAWHID_APP_CONFIG_OP_GET_INFO:
+            handle_config_encoder_get_info(packet);
+            break;
+        case RAWHID_APP_CONFIG_OP_GET_BINDINGS:
+            handle_config_encoder_get_bindings(packet);
+            break;
+        case RAWHID_APP_CONFIG_OP_SET_BINDINGS:
+            handle_config_encoder_set_bindings(packet);
+            break;
+        case RAWHID_APP_CONFIG_OP_GET_DIRTY:
+            handle_config_encoder_get_dirty(packet);
+            break;
+        case RAWHID_APP_CONFIG_OP_SAVE:
+            handle_config_encoder_save(packet);
+            break;
+        case RAWHID_APP_CONFIG_OP_DISCARD:
+            handle_config_encoder_discard(packet);
+            break;
+        case RAWHID_APP_CONFIG_OP_CLEAR_OVERRIDE:
+            handle_config_encoder_clear_override(packet);
+            break;
+        default:
+            send_config_response(seq, feature, op, RAWHID_APP_CONFIG_STATUS_UNSUPPORTED_OP, NULL,
+                                 0);
+            break;
+        }
+        break;
+    case RAWHID_APP_CONFIG_FEATURE_COMBO:
+#if IS_ENABLED(CONFIG_RAWHID_APP_COMBO_RUNTIME)
+        handle_config_combo_request(packet);
+#else
         send_config_response(seq, feature, op, RAWHID_APP_CONFIG_STATUS_UNSUPPORTED_FEATURE, NULL,
                              0);
-        return;
-    }
-
-    switch (op) {
-    case RAWHID_APP_CONFIG_OP_GET_INFO:
-        handle_config_encoder_get_info(packet);
-        break;
-    case RAWHID_APP_CONFIG_OP_GET_BINDINGS:
-        handle_config_encoder_get_bindings(packet);
-        break;
-    case RAWHID_APP_CONFIG_OP_SET_BINDINGS:
-        handle_config_encoder_set_bindings(packet);
-        break;
-    case RAWHID_APP_CONFIG_OP_GET_DIRTY:
-        handle_config_encoder_get_dirty(packet);
-        break;
-    case RAWHID_APP_CONFIG_OP_SAVE:
-        handle_config_encoder_save(packet);
-        break;
-    case RAWHID_APP_CONFIG_OP_DISCARD:
-        handle_config_encoder_discard(packet);
-        break;
-    case RAWHID_APP_CONFIG_OP_CLEAR_OVERRIDE:
-        handle_config_encoder_clear_override(packet);
+#endif
         break;
     default:
-        send_config_response(seq, feature, op, RAWHID_APP_CONFIG_STATUS_UNSUPPORTED_OP, NULL, 0);
+        send_config_response(seq, feature, op, RAWHID_APP_CONFIG_STATUS_UNSUPPORTED_FEATURE, NULL,
+                             0);
         break;
     }
 }

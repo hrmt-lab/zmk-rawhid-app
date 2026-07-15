@@ -13,6 +13,25 @@ endif()
 
 if(CONFIG_RAWHID_APP_CONFIG_RPC)
   target_sources(app PRIVATE src/encoder_runtime.c)
+  target_sources(app PRIVATE src/behavior_identity.c)
+endif()
+
+# This is deliberately compiled for every build that discovers this module:
+# a disabled /combos node without the Keylink runtime would silently remove
+# all Combo behavior.
+target_sources(app PRIVATE src/combo_runtime_contract.c)
+
+if(CONFIG_RAWHID_APP_COMBO_RUNTIME)
+  target_sources(app PRIVATE src/combo_runtime.c)
+
+  add_custom_target(rawhid_app_combo_listener_order_check ALL
+    COMMAND ${CMAKE_COMMAND}
+      -DMAP_FILE=${CMAKE_BINARY_DIR}/zephyr/zmk.map
+      -DDT_HEADER_FILE=${CMAKE_BINARY_DIR}/zephyr/include/generated/zephyr/devicetree_generated.h
+      -P ${CMAKE_CURRENT_LIST_DIR}/cmake/verify_combo_listener_order.cmake
+    DEPENDS ${CMAKE_BINARY_DIR}/zephyr/zmk.elf
+    VERBATIM
+  )
 endif()
 
 if(CONFIG_RAWHID_APP)

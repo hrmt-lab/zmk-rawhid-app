@@ -62,6 +62,7 @@ enum rawhid_app_ai_provider {
 
 enum rawhid_app_config_feature {
     RAWHID_APP_CONFIG_FEATURE_ENCODER = 0x01,
+    RAWHID_APP_CONFIG_FEATURE_COMBO = 0x02,
 };
 
 enum rawhid_app_config_op {
@@ -72,6 +73,17 @@ enum rawhid_app_config_op {
     RAWHID_APP_CONFIG_OP_SAVE = 0x05,
     RAWHID_APP_CONFIG_OP_DISCARD = 0x06,
     RAWHID_APP_CONFIG_OP_CLEAR_OVERRIDE = 0x07,
+};
+
+enum rawhid_app_config_combo_op {
+    RAWHID_APP_CONFIG_COMBO_OP_GET_INFO = 0x01,
+    RAWHID_APP_CONFIG_COMBO_OP_GET_COMBO = 0x02,
+    RAWHID_APP_CONFIG_COMBO_OP_SET_COMBO = 0x03,
+    RAWHID_APP_CONFIG_COMBO_OP_GET_DIRTY = 0x04,
+    RAWHID_APP_CONFIG_COMBO_OP_SAVE = 0x05,
+    RAWHID_APP_CONFIG_COMBO_OP_DISCARD = 0x06,
+    RAWHID_APP_CONFIG_COMBO_OP_DELETE_COMBO = 0x07,
+    RAWHID_APP_CONFIG_COMBO_OP_RESET_TO_KEYMAP = 0x08,
 };
 
 enum rawhid_app_config_status {

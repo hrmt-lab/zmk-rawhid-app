@@ -16,5 +16,6 @@ uint64_t rawhid_app_identity_get_uid_hash(void);
  *   bit 5 — CONFIG_RAWHID_APP_HOST_ACTION
  *   bit 6 — CONFIG_RAWHID_APP_KEY_STATS
  *   bit 7 — CONFIG_RAWHID_APP_LAYER_STATE_REPORT
- *   bit 8 — CONFIG_RAWHID_APP_KEY_PRESS */
+ *   bit 8 — CONFIG_RAWHID_APP_KEY_PRESS
+ *   bit 9 — CONFIG_RAWHID_APP_CONFIG_RPC */
 uint32_t rawhid_app_identity_get_capabilities(void);

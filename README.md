@@ -8,7 +8,8 @@
 - **APP_LAYER**: ホストからの ZMK レイヤー制御
 - **TIME_SYNC**: ホスト時刻の同期・保持
 - **AI_USAGE**: Claude Code / Codex 使用率の保持
-- **CONFIG_RPC**: ZMK Studio 用の encoder runtime override の編集・保存
+- **CONFIG_RPC**: ZMK Studio 用の encoder runtime override の編集・保存、および
+  read-only Combo runtime の照会
 
 を行い、解析結果を getter で他モジュール（例: Prospector ディスプレイ）へ公開します。
 
@@ -18,6 +19,7 @@
 - **HOST_ACTION**: キーから PC 側操作をトリガーする（`&host_action` behavior）
 - **KEY_STATS**: キー位置ごとの打鍵数（キーの内容は送らない）
 - **LAYER_STATE**: 現在の最上位レイヤーと layer mask（表示用）
+- **KEY_PRESS**: キー位置ごとの押下・離上イベント
 
 を送信できます。いずれも `DEVICE_HELLO` の capability bit で個別に有効化されます。
 
@@ -87,14 +89,17 @@ CONFIG_RAWHID_APP_CONFIG_RPC=y
 | `RAWHID_APP_HOST_ACTION` | HOST_ACTION uplink（`&host_action <id> <value>`） |
 | `RAWHID_APP_KEY_STATS` | KEY_STATS uplink（`uint16_t * ZMK_KEYMAP_LEN` の RAM を使用） |
 | `RAWHID_APP_KEY_PRESS` | KEY_PRESS uplink（押下/離上イベントを即時送信） |
-| `RAWHID_APP_CONFIG_RPC` | Config RPC の ENCODER feature。settings backend を使用してoverrideを保存する |
+| `RAWHID_APP_CONFIG_RPC` | Config RPC の ENCODER feature（編集・settings保存）を有効化。Combo runtime有効時はCombo featureの照会も提供 |
+| `RAWHID_APP_COMBO_RUNTIME` | Keylink runtime Combo engine。`/combos` を `status = "disabled"` にして有効化 |
+| `RAWHID_APP_COMBO_SETTINGS` | Combo Settings table をNVSへ保存・読込。Combo runtimeとConfig RPCが必要 |
 
 ---
 
 ## 各機能の使い方
 
 ヘッダはモジュールの `include/` にあり、ビルドに含めれば `<rawhid_app/...>` で参照できます。
-いずれも `#else` の inline スタブ付きで、CONFIG 無効時でも include 側はビルド可能です。
+`time_sync.h` と `ai_usage.h` のgetterには、機能CONFIGが無効な場合の inline スタブがあります。
+その他のruntime APIは、対応する機能を有効にした構成でのみ利用してください。
 
 ### Host action uplink
 
@@ -161,6 +166,18 @@ DISCARDにより同じLayer.idが復元済みの場合だけsaved bindingを復�
 現在存在しないLayer.idを持つsettings recordは起動時にも保持し、実行や別レイヤーへの適用はしません。
 `GET_DIRTY` はこのorphan recordをdirtyとして返し、次回SAVEで削除します。overrideがないencoderイベントは
 従来どおり `.keymap` の `sensor-bindings` へ渡されます。
+
+### Combo runtime の照会（CONFIG_RPC）
+
+`CONFIG_RAWHID_APP_COMBO_RUNTIME=y` と `CONFIG_RAWHID_APP_CONFIG_RPC=y` を有効にすると、
+CONFIG_RPC の COMBO feature（`feature=0x02`）でruntime Comboを照会できます。
+現在は読み取り専用で、`GET_INFO=0x01` と `GET_COMBO=0x02` のみをサポートします。
+`SET_COMBO`、`GET_DIRTY`、`SAVE`、`DISCARD`、`DELETE_COMBO`、`RESET_TO_KEYMAP` はop値を予約しているだけで、
+現在は `UNSUPPORTED_OP` を返します。
+
+Comboの保存済みtableを使う場合は、加えて `CONFIG_RAWHID_APP_COMBO_SETTINGS=y` を有効にします。
+この設定はNVS Settings backendを必要とし、`keylink/cmb/v1/table` に固定長tableを保存します。
+Combo runtimeだけでもkeymap由来の定義を読み取り専用で利用できます。
 
 ### バッテリー残量（BATTERY_STATUS uplink）
 
@@ -368,8 +385,9 @@ Host Link packet は **64 byte 固定**。リトルエンディアン。
 | `0x90` | CONFIG_REQUEST | H→D |
 | `0x91` | CONFIG_RESPONSE | D→H |
 
-`0x40` 以降は device → host の uplink です。送信するには対応する capability bit を `DEVICE_HELLO` で
-立てます（host は bit が立っていない type を破棄します）。
+`0x40`〜`0x80` は device → host の uplink です。送信するには対応する capability bit を
+`DEVICE_HELLO` で立てます（host は bit が立っていない type を破棄します）。
+`0x90` は host → device のCONFIG_REQUEST、`0x91` は device → host のCONFIG_RESPONSEです。
 
 検証（`src/dispatch.c`）: magic / version / 既知 type / length==64 / `payload_len<=52` /
 header reserved と payload 未使用域が 0。
@@ -455,6 +473,10 @@ flags bit0 が `1` のとき押下、`0` のとき離上です。`CONFIG_RAWHID_
 `GET_INFO=0x01`、`GET_BINDINGS=0x02`、`SET_BINDINGS=0x03`、`GET_DIRTY=0x04`、`SAVE=0x05`、
 `DISCARD=0x06`、`CLEAR_OVERRIDE=0x07` です。Layer.idはpayloadのu32 LE、encoder_idはu8で指定します。
 
+`CONFIG_RAWHID_APP_COMBO_RUNTIME=y` も有効な場合は、COMBO feature（`feature=0x02`）の
+`GET_INFO=0x01` と `GET_COMBO=0x02` を処理します。ほかのCombo opは将来用に予約されており、
+現時点では `UNSUPPORTED_OP` を返します。
+
 Config RPCのheaderとop/payload形式はHost Link v2で固定です。SAVEはworkqueueでsettings操作を行い、
 完了後にresponseを返します。Hostのtimeout retryには短寿命response cacheで同じresponseを再送します。
 
@@ -469,6 +491,9 @@ include/rawhid_app/
   ai_usage.h    … flags/struct/getter + #else スタブ
   identity.h    … device_uid_hash / capabilities の getter 宣言
   uplink.h      … uplink 共通 helper（prepare/seq/send/初期push）の宣言
+  encoder_runtime.h … encoder override runtime API
+  behavior_identity.h … settings record用behavior identity hash
+  combo_runtime.h … read-only Combo runtime API
 src/
   dispatch.c    … raw_hid_received_event 購読・検証・分岐・HELLO応答
   layer_control.c
@@ -479,8 +504,12 @@ src/
   uplink.c              … uplink 共通 helper・HELLO後の初期 push
   battery_report.c      … BATTERY_STATUS uplink
   key_stats.c           … KEY_STATS uplink
+  key_press.c           … KEY_PRESS uplink
   layer_state_report.c  … LAYER_STATE uplink
   encoder_runtime.c     … Config RPC ENCODER override・settings保存・sensor event先取り
+  behavior_identity.c   … behavior identity hashの実装
+  combo_runtime.c       … Combo runtime・Settings tableの読込
+  combo_runtime_contract.c … /combos とCombo runtimeの構成チェック
   behaviors/
     behavior_host_action.c … &host_action behavior + HOST_ACTION uplink
 dts/
@@ -489,8 +518,8 @@ dts/
 ```
 
 ポイント:
-- **疎結合**: 各 feature は `K_MUTEX` 付き状態 + getter で公開。`#else` inline スタブにより、
-  CONFIG 無効時でも include 側はビルド可能。
+- **疎結合**: 時刻・AI使用率のgetterは `K_MUTEX` 付き状態で公開し、機能CONFIGが無効な場合にも
+  inlineスタブで呼び出せます。ほかのruntime APIは対応機能を有効にした構成で利用します。
 - **拡張**: 独自パケット型を足したい場合は `dispatch.c` の `switch` に分岐を追加するか、
   将来的にコールバック登録口を設ける。
 
@@ -555,6 +584,7 @@ FNV-1a 64bit でハッシュ化した値のみを送ります。hash 結果が 0
 | 6 | KEY_STATS | `RAWHID_APP_KEY_STATS` |
 | 7 | LAYER_STATE | `RAWHID_APP_LAYER_STATE_REPORT` |
 | 8 | KEY_PRESS | `RAWHID_APP_KEY_PRESS` |
+| 9 | CONFIG_RPC | `RAWHID_APP_CONFIG_RPC` |
 
 Host 側はこのビットを見て、未対応デバイスへのパケット送信をスキップできます。
 

@@ -5,7 +5,7 @@
 
 #include <zephyr/sys/util.h>
 
-/* AI usage flag bits (RawHID application protocol v1). */
+/* AI usage flag bits (RawHID application protocol v2). */
 #define RAWHID_APP_AI_USAGE_FLAG_FIVE_HOUR_VALID  BIT(0)
 #define RAWHID_APP_AI_USAGE_FLAG_SEVEN_DAY_VALID  BIT(1)
 #define RAWHID_APP_AI_USAGE_FLAG_ESTIMATED        BIT(2)
