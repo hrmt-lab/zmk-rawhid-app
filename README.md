@@ -90,26 +90,28 @@ CONFIG_RAWHID_APP_CONFIG_RPC=y
 | `RAWHID_APP_KEY_STATS` | KEY_STATS uplink（`uint16_t * ZMK_KEYMAP_LEN` の RAM を使用） |
 | `RAWHID_APP_KEY_PRESS` | KEY_PRESS uplink（押下/離上イベントを即時送信） |
 | `RAWHID_APP_CONFIG_RPC` | Config RPC の ENCODER feature（編集・settings保存）を有効化。Combo runtime有効時はCombo featureの照会も提供 |
-| `RAWHID_APP_COMBO_RUNTIME` | Keylink runtime Combo engine。`/combos` を `status = "disabled"` にして有効化 |
+| `RAWHID_APP_COMBO_RUNTIME` | Keylink runtime Combo engine。ドングルの overlay で `/combos` を `status = "disabled"` にして有効化 |
 | `RAWHID_APP_COMBO_SETTINGS` | Combo Settings table をNVSへ保存・読込。Combo runtimeとConfig RPCが必要 |
 
-`CONFIG_RAWHID_APP_COMBO_RUNTIME=y` を有効にする場合は、キーボードの `.keymap` ファイルで
-`/combos` を次のように `status = "disabled"` にしてください。
+`CONFIG_RAWHID_APP_COMBO_RUNTIME=y` を有効にする場合は、Combo の定義自体は通常どおり
+キーボードの `.keymap` ファイルに記載し、`status = "disabled"` の上書きだけをドングルの
+overlay（例: `<keyboard>_dongle.overlay`）に記載してください。`.keymap` 側で `/combos` を
+無効化してはいけません。
 
 ```dts
+// <keyboard>_dongle.overlay
 / {
     combos {
-        compatible = "zmk,combos";
         status = "disabled";
-
-        // Combo の子ノード定義
     };
 };
 ```
 
-これは ZMK 標準の Combo listener を生成させず、ZMK 標準と Keylink runtime の両方が同じ
-キーイベントを処理することを防ぐためです。ノードを削除するのではなく無効化することで、`/combos` の
-子ノードは Devicetree 上に残り、Keylink runtime が読み取り専用の初期 Combo 定義として利用できます。
+これにより、Keylink runtime を使用するドングルでは ZMK 標準の Combo listener を生成せず、
+ZMK 標準と Keylink runtime の両方が同じキーイベントを処理することを防ぎます。一方、ドングル以外の
+ビルドまで `/combos` が無効化されることはありません。ノードを削除するのではなくドングルの overlay で
+無効化することで、`/combos` の子ノードは Devicetree 上に残り、Keylink runtime が初期 Combo 定義として
+利用できます。
 
 ---
 

@@ -5,7 +5,7 @@
 ## 1. 目的と基本方針
 
 - ZMK の `.keymap` に定義された combo を初期値として読み込み、Keylink Studio から追加・編集・削除できるようにする。
-- ZMK本体は変更しない。`/combos`を `status = "disabled"` とし、disabled childを `zmk-rawhid-app` がdefaultへ変換する。ZMK標準Combo listenerはELFへ入れず、module側の単一listenerだけがRAM上の共通combo tableを判定する。
+- ZMK本体は変更しない。Combo定義は `.keymap` に置いたまま、ドングルのoverlayでのみ `/combos`を `status = "disabled"` に上書きし、disabled childを `zmk-rawhid-app` がdefaultへ変換する。`.keymap` 側では `/combos` を無効化しない。ドングルではZMK標準Combo listenerをELFへ入れず、module側の単一listenerだけがRAM上の共通combo tableを判定する。
 - Combo 編集には ZMK Studio RPC と Host Link Config RPC の両方を使う。通常キー編集、Encoder 編集、Combo 編集の可用性と結果は分離する。
 - Encoder の Config RPC、dirty、保存、破棄、保存レコード検証、部分失敗の設計を可能な範囲で踏襲する。
 - 最大数分の静的配列を使用し、動的メモリ確保は行わない。
@@ -13,7 +13,7 @@
 
 ### 1.1 Firmware Phase 1C result
 
-- disabled `/combos`から読み取り専用default tableを生成し、32 static runtime slotsへ起動時コピーする方式が成立した。
+- ドングルのoverlayでdisabledにした `/combos`から読み取り専用default tableを生成し、32 static runtime slotsへ起動時コピーする方式が成立した。
 - candidate、capture / re-raise、per-Combo timeout、包含 / overlap、active Combo、release、slow-release、layer、prior-idle、modifier除外、hold-tap相互作用をZMK revision `484a0547` の `combo.c` 相当としてmoduleへ移植した。
 - Cornix defaultは重複して発火不能だった後方 `layer4` を削除し、6 Combo。central / left / right、clean / incremental buildが成功した。
 - 32 Comboはbuild成功、33 Combo、1-key、9-key、同一key set + overlapping layerはbuild failure。layer完全分離、包含、partial overlapはbuild成功した。
