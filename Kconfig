@@ -117,7 +117,7 @@ config RAWHID_APP_COMBO_SETTINGS
 config RAWHID_APP_COMBO_SETTINGS_TEST
     bool
     default n
-    depends on RAWHID_APP_COMBO_RUNTIME && NATIVE_SIM
+    depends on RAWHID_APP_COMBO_RUNTIME && BOARD_NATIVE_SIM
     select RAWHID_APP_COMBO_SETTINGS_CORE
     help
       Internal native-fixture switch. It deliberately has no prompt and must

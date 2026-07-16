@@ -290,6 +290,8 @@ Host Link payload 52 byteに1 comboをちょうど格納する。
 - 保存失敗時はRAM上の編集内容とdirtyを維持し、再保存可能とする。
 - `occupied_mask = 0`かつcanonical tombstone recordが削除済みslotを表す。saved tableが存在する限りDevicetree defaultを自動mergeしないため、削除済みdefaultは再起動後も復活しない。
 - SAVEはpersisted imageをscratchへ読み、dirty slotだけを置換して `settings_save_one()`を1回呼ぶ。Zephyr NVSはdata後にATEを書くため、失敗／電源断後も新旧slotが混在しない。
+- `settings_save_one()` は同期APIだが、Raw HID OUT受信callback／`raw_hid_received_event` の同期コールスタックからは呼ばない。SAVE受付時にrequest identityを値コピーしてsystem workqueueへsubmitし、workerで保存とresponse送信を行う。専用workqueue stackは持たない。
+- SAVE pending中の同一request retryは同じworkerの完了responseを待ち、追加writeを開始しない。別のCombo mutationと別SAVEは`BUSY`、GET系はruntime tableを変更しないため許可する。
 - slot別key + metadata、A/B bank、generation commit markerはversion 1では不採用。Zephyr Settingsにmulti-key transactionがなく、A/B loadの追加RAMまたはboot時非同期loadが6 KB目標とlistener安全性を悪化させるため。
 - stale / invalid recordは起動時に自動削除せず、該当slotをSET / DELETEしてSAVEが成功した場合だけ置換／tombstone化する。無関係slotのSAVEではraw recordを保持する。
 - stale / invalid / fallback診断はdirtyとは別概念であり、診断だけでは保存バーを表示しない。

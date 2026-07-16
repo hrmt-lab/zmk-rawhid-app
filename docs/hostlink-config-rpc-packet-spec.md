@@ -1035,6 +1035,10 @@ Phase 2C firmwareが実装するのは `GET_INFO` / `GET_COMBO` とSettings tabl
 
 `SAVE` が非同期実行中の場合、同一requestのretryには追加処理を開始しない。それ以外のCombo mutationと、同じscratch bufferを必要とするsaved diagnosticの読出しは `BUSY` としてよい。
 
+Combo `SAVE` のSettings writeはsystem workqueueで実行する。Raw HID OUT callbackはrequest identity（`seq`, `feature`, `op`, `flags`, `payload_len`, payload bytes）を値コピーしてworkをsubmitした時点でreturnし、`settings_save_one()`と最終`CONFIG_RESPONSE`生成はworker contextで行う。受信packetやcallback stack上のbufferをpending stateから参照してはならない。
+
+SAVE pending中は、同一identityのretryを新しいrequestとして処理せず、追加response／追加writeを発生させない。元worker完了時のresponseがそのrequestの最終responseとなり、完了後のretryは共通response cacheから同一byte列を再送する。pending中の別SAVE、`SET_COMBO`、`DELETE_COMBO`、`DISCARD`、`RESET_TO_KEYMAP`は`BUSY`。`GET_INFO`、`GET_COMBO`、`GET_DIRTY`はruntime mutationと競合しないため実行可能とする。
+
 ### COMBO GET_INFO
 
 Requestは `payload_len = 0`。それ以外は `BAD_PACKET`。

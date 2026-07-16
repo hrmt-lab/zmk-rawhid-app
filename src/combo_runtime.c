@@ -78,7 +78,7 @@ BUILD_ASSERT(RAWHID_APP_COMBO_SETTINGS_SLOT_CRC_OFFSET + sizeof(uint32_t) ==
                  RAWHID_APP_COMBO_SETTINGS_SLOT_LEN,
              "Combo Settings slot CRC offset mismatch");
 BUILD_ASSERT(RAWHID_APP_COMBO_WIRE_ITEM_LEN == 52, "Combo wire item must be 52 bytes");
-#if !(IS_ENABLED(CONFIG_RAWHID_APP_COMBO_SETTINGS_TEST) && IS_ENABLED(CONFIG_NATIVE_SIM))
+#if !(IS_ENABLED(CONFIG_RAWHID_APP_COMBO_SETTINGS_TEST) && IS_ENABLED(CONFIG_BOARD_NATIVE_SIM))
 BUILD_ASSERT(DT_NODE_EXISTS(DT_NODELABEL(storage_partition)),
              "Combo Settings v1 requires a storage_partition NVS backend");
 BUILD_ASSERT(IS_ENABLED(CONFIG_SETTINGS_NVS),
@@ -174,13 +174,40 @@ static struct rawhid_app_combo_slot runtime_slots[RAWHID_APP_COMBO_RUNTIME_MAX_S
 static uint8_t evaluation_order[RAWHID_APP_COMBO_RUNTIME_MAX_SLOTS];
 static uint8_t runtime_slot_count;
 static struct rawhid_app_combo_runtime_diagnostics combo_diagnostics;
+static uint32_t combo_dirty_slots;
+static bool combo_metadata_repair_pending;
+#if IS_ENABLED(CONFIG_RAWHID_APP_COMBO_SETTINGS_CORE)
+/* A failed single-image write may have committed either complete image.  Until
+ * a later direct Settings read establishes which one, the scratch is not a
+ * trustworthy saved baseline. */
+static bool combo_settings_baseline_refresh_required;
+#endif
 
 #if IS_ENABLED(CONFIG_RAWHID_APP_COMBO_SETTINGS)
 /* The sole persisted-image buffer; it also serves stale GET_COMBO reads. */
 static uint8_t combo_settings_table[RAWHID_APP_COMBO_SETTINGS_TABLE_LEN] __aligned(4);
+#elif IS_ENABLED(CONFIG_RAWHID_APP_COMBO_SETTINGS_TEST)
+/* Native fixtures borrow their caller-owned image; no production buffer is linked. */
+static uint8_t *combo_settings_table;
+static uint8_t *combo_settings_test_scratch;
+static size_t combo_settings_test_scratch_length;
+static uint8_t *combo_settings_test_persisted;
+static size_t combo_settings_test_persisted_length;
+static bool combo_settings_test_persisted_present;
+static bool combo_settings_test_storage_read_error;
+static int combo_settings_test_write_result;
+static bool combo_settings_test_commit_on_write_error;
+static unsigned int combo_settings_test_writes;
+#endif
+
+#if IS_ENABLED(CONFIG_RAWHID_APP_COMBO_SETTINGS) || IS_ENABLED(CONFIG_RAWHID_APP_COMBO_SETTINGS_TEST)
 static bool combo_settings_record_seen;
 static bool combo_settings_read_error;
 static bool combo_settings_length_invalid;
+#endif
+
+#if IS_ENABLED(CONFIG_RAWHID_APP_COMBO_SETTINGS_CORE)
+static const uint8_t *combo_settings_slot(uint8_t slot);
 #endif
 
 static uint8_t pressed_keys_count;
@@ -311,10 +338,32 @@ static bool combo_layer_sets_overlap(uint32_t left, uint32_t right) {
     return left == 0 || right == 0 || (left & right) != 0;
 }
 
+static bool combo_definition_equal(const struct rawhid_app_combo_runtime_definition *left,
+                                   const struct rawhid_app_combo_runtime_definition *right) {
+    return memcmp(left->name, right->name, sizeof(left->name)) == 0 &&
+           left->key_count == right->key_count &&
+           memcmp(left->key_positions, right->key_positions, sizeof(left->key_positions)) == 0 &&
+           left->binding.behavior_dev == right->binding.behavior_dev &&
+           left->binding.param1 == right->binding.param1 &&
+           left->binding.param2 == right->binding.param2 && left->layer_mask == right->layer_mask &&
+           left->timeout_ms == right->timeout_ms &&
+           left->require_prior_idle_ms == right->require_prior_idle_ms &&
+           left->slow_release == right->slow_release;
+}
+
+static bool combo_binding_valid(const struct zmk_behavior_binding *binding) {
+    if (binding->behavior_dev == NULL || zmk_behavior_get_binding(binding->behavior_dev) == NULL) {
+        return false;
+    }
+    int rc = zmk_behavior_validate_binding(binding);
+    return rc >= 0 || rc == -ENODEV;
+}
+
 int rawhid_app_combo_runtime_validate(const struct rawhid_app_combo_runtime_definition *definition,
                                       int replacing_slot) {
     if (definition == NULL || definition->key_count < 2 ||
-        definition->key_count > RAWHID_APP_COMBO_RUNTIME_MAX_KEYS || definition->binding.behavior_dev == NULL ||
+        definition->key_count > RAWHID_APP_COMBO_RUNTIME_MAX_KEYS ||
+        !combo_binding_valid(&definition->binding) ||
         definition->timeout_ms < 1 || definition->timeout_ms > 1000 ||
         definition->require_prior_idle_ms > 1000 || !combo_name_is_canonical(definition->name)) {
         return -EINVAL;
@@ -410,6 +459,12 @@ static void combo_runtime_finalize_definitions(void) {
     }
 }
 
+static void combo_runtime_rebuild_indexes(void) {
+    memset(evaluation_order, 0, sizeof(evaluation_order));
+    memset(combo_lookup, 0, sizeof(combo_lookup));
+    combo_runtime_finalize_definitions();
+}
+
 static int combo_runtime_build_defaults(void) {
     combo_runtime_clear_definitions();
     for (uint8_t index = 0; index < ARRAY_SIZE(default_combos); index++) {
@@ -421,7 +476,7 @@ static int combo_runtime_build_defaults(void) {
             return validation;
         }
     }
-    combo_runtime_finalize_definitions();
+    combo_runtime_rebuild_indexes();
     return 0;
 }
 
@@ -737,6 +792,142 @@ bool rawhid_app_combo_runtime_get(uint8_t slot,
     return true;
 }
 
+#if IS_ENABLED(CONFIG_RAWHID_APP_COMBO_SETTINGS_CORE)
+static bool combo_runtime_matches_saved_slot(uint8_t slot) {
+    if ((combo_diagnostics.flags & RAWHID_APP_COMBO_SETTINGS_FLAGS_SAVED_TABLE_LOADED) == 0 ||
+        (combo_diagnostics.stale_slots | combo_diagnostics.invalid_slots) & BIT(slot)) {
+        return false;
+    }
+
+    const uint8_t *record = combo_settings_slot(slot);
+    bool saved_occupied = (sys_get_le32(&combo_settings_table[8]) & BIT(slot)) != 0;
+    const struct rawhid_app_combo_slot *runtime = combo_slot(slot);
+    if (!saved_occupied) {
+        return runtime == NULL;
+    }
+    if (runtime == NULL || (record[0] & BIT(0)) == 0) {
+        return false;
+    }
+
+    zmk_behavior_local_id_t behavior_id = zmk_behavior_get_local_id(runtime->definition.binding.behavior_dev);
+    if (behavior_id == UINT16_MAX ||
+        record[1] !=
+            (runtime->definition.key_count | (runtime->definition.slow_release ? BIT(4) : 0)) ||
+        memcmp(&record[2], runtime->definition.name, sizeof(runtime->definition.name)) != 0 ||
+        sys_get_le16(&record[34]) != behavior_id ||
+        sys_get_le32(&record[36]) != runtime->definition.binding.param1 ||
+        sys_get_le32(&record[40]) != runtime->definition.binding.param2 ||
+        sys_get_le32(&record[44]) != runtime->definition.layer_mask ||
+        sys_get_le16(&record[48]) != runtime->definition.timeout_ms ||
+        sys_get_le16(&record[50]) !=
+            (runtime->definition.require_prior_idle_ms == 0 ? UINT16_MAX
+                                                            : runtime->definition.require_prior_idle_ms)) {
+        return false;
+    }
+    /* Default-combo definitions do not promise a canonical value in their
+     * unused position tail.  The persisted record does, so compare only the
+     * semantically occupied keys after the decoder has checked that tail. */
+    for (uint8_t index = 0; index < runtime->definition.key_count; index++) {
+        if (sys_get_le16(&record[18 + index * sizeof(uint16_t)]) !=
+            runtime->definition.key_positions[index]) {
+            return false;
+        }
+    }
+    return true;
+}
+#endif
+
+static void combo_runtime_update_dirty_slot(uint8_t slot) {
+#if IS_ENABLED(CONFIG_RAWHID_APP_COMBO_SETTINGS_CORE)
+    if (combo_runtime_matches_saved_slot(slot)) {
+        combo_dirty_slots &= ~BIT(slot);
+    } else {
+        combo_dirty_slots |= BIT(slot);
+    }
+#else
+    ARG_UNUSED(slot);
+#endif
+}
+
+static void combo_runtime_note_mutation(void) {
+#if IS_ENABLED(CONFIG_RAWHID_APP_COMBO_SETTINGS_CORE)
+    if ((combo_diagnostics.flags & (RAWHID_APP_COMBO_SETTINGS_FLAGS_METADATA_INVALID_FALLBACK |
+                                    RAWHID_APP_COMBO_SETTINGS_FLAGS_VERSION_UNSUPPORTED_FALLBACK |
+                                    RAWHID_APP_COMBO_SETTINGS_FLAGS_READ_ERROR_FALLBACK)) != 0) {
+        combo_metadata_repair_pending = true;
+    }
+#endif
+}
+
+int rawhid_app_combo_runtime_upsert(uint8_t slot,
+                                    const struct rawhid_app_combo_runtime_definition *definition) {
+    if (slot >= ARRAY_SIZE(runtime_slots) || definition == NULL) {
+        return -EINVAL;
+    }
+
+    struct rawhid_app_combo_runtime_definition normalized = *definition;
+    combo_normalize_positions(&normalized);
+    int rc = rawhid_app_combo_runtime_validate(&normalized, slot);
+    if (rc != 0) {
+        return rc;
+    }
+
+    if (runtime_slots[slot].occupied && combo_definition_equal(&runtime_slots[slot].definition, &normalized)) {
+        return 0;
+    }
+
+    runtime_slots[slot] = (struct rawhid_app_combo_slot){
+        .occupied = true,
+        .source_order = slot,
+        .definition = normalized,
+    };
+    combo_runtime_rebuild_indexes();
+    combo_runtime_update_dirty_slot(slot);
+    combo_runtime_note_mutation();
+    return 0;
+}
+
+int rawhid_app_combo_runtime_delete(uint8_t slot) {
+    if (slot >= ARRAY_SIZE(runtime_slots)) {
+        return -EINVAL;
+    }
+    bool saved_diagnostic = (combo_diagnostics.stale_slots | combo_diagnostics.invalid_slots) & BIT(slot);
+    if (!runtime_slots[slot].occupied && !saved_diagnostic) {
+        return 0;
+    }
+    memset(&runtime_slots[slot], 0, sizeof(runtime_slots[slot]));
+    combo_runtime_rebuild_indexes();
+    combo_runtime_update_dirty_slot(slot);
+    combo_runtime_note_mutation();
+    return 0;
+}
+
+bool rawhid_app_combo_runtime_dirty(void) {
+    return combo_dirty_slots != 0 || combo_metadata_repair_pending;
+}
+
+int rawhid_app_combo_runtime_reset_to_keymap(void) {
+    int rc = combo_runtime_build_defaults();
+    if (rc != 0) {
+        return rc;
+    }
+
+    combo_dirty_slots = 0;
+#if IS_ENABLED(CONFIG_RAWHID_APP_COMBO_SETTINGS_CORE)
+    if (combo_diagnostics.flags & RAWHID_APP_COMBO_SETTINGS_FLAGS_SAVED_TABLE_LOADED) {
+        for (uint8_t slot = 0; slot < RAWHID_APP_COMBO_RUNTIME_MAX_SLOTS; slot++) {
+            combo_runtime_update_dirty_slot(slot);
+        }
+    } else if (combo_diagnostics.flags &
+               (RAWHID_APP_COMBO_SETTINGS_FLAGS_METADATA_INVALID_FALLBACK |
+                RAWHID_APP_COMBO_SETTINGS_FLAGS_VERSION_UNSUPPORTED_FALLBACK |
+                RAWHID_APP_COMBO_SETTINGS_FLAGS_READ_ERROR_FALLBACK)) {
+        combo_metadata_repair_pending = true;
+    }
+#endif
+    return 0;
+}
+
 bool rawhid_app_combo_runtime_keys_pressed(void) { return physical_keys_pressed_count != 0; }
 
 bool rawhid_app_combo_runtime_idle(void) {
@@ -762,7 +953,7 @@ enum combo_saved_record_state {
     COMBO_SAVED_TOMBSTONE,
 };
 
-static uint8_t *combo_settings_slot(uint8_t slot) {
+static const uint8_t *combo_settings_slot(uint8_t slot) {
     return &combo_settings_table[RAWHID_APP_COMBO_SETTINGS_HEADER_LEN +
                                  slot * RAWHID_APP_COMBO_SETTINGS_SLOT_LEN];
 }
@@ -784,6 +975,76 @@ static bool combo_settings_header_valid(bool *unsupported_version) {
         return false;
     }
     return true;
+}
+
+static void combo_settings_encode_tombstone(uint8_t slot) {
+    uint8_t *record = &combo_settings_table[RAWHID_APP_COMBO_SETTINGS_HEADER_LEN +
+                                            slot * RAWHID_APP_COMBO_SETTINGS_SLOT_LEN];
+    memset(record, 0, RAWHID_APP_COMBO_SETTINGS_SLOT_CRC_LEN);
+    sys_put_le32(crc32_ieee(record, RAWHID_APP_COMBO_SETTINGS_SLOT_CRC_LEN),
+                 &record[RAWHID_APP_COMBO_SETTINGS_SLOT_CRC_OFFSET]);
+}
+
+static int combo_settings_encode_runtime_slot(uint8_t slot) {
+    uint8_t *record = &combo_settings_table[RAWHID_APP_COMBO_SETTINGS_HEADER_LEN +
+                                            slot * RAWHID_APP_COMBO_SETTINGS_SLOT_LEN];
+    const struct rawhid_app_combo_slot *runtime = combo_slot(slot);
+    if (runtime == NULL) {
+        combo_settings_encode_tombstone(slot);
+        return 0;
+    }
+    zmk_behavior_local_id_t behavior_id = zmk_behavior_get_local_id(runtime->definition.binding.behavior_dev);
+    if (behavior_id == UINT16_MAX) {
+        return -EINVAL;
+    }
+    memset(record, 0, RAWHID_APP_COMBO_SETTINGS_SLOT_CRC_LEN);
+    record[0] = BIT(0);
+    record[1] = runtime->definition.key_count | (runtime->definition.slow_release ? BIT(4) : 0);
+    memcpy(&record[2], runtime->definition.name, sizeof(runtime->definition.name));
+    for (uint8_t key = 0; key < RAWHID_APP_COMBO_RUNTIME_MAX_KEYS; key++) {
+        sys_put_le16(key < runtime->definition.key_count ? runtime->definition.key_positions[key]
+                                                          : UINT16_MAX,
+                     &record[18 + key * sizeof(uint16_t)]);
+    }
+    sys_put_le16(behavior_id, &record[34]);
+    sys_put_le32(runtime->definition.binding.param1, &record[36]);
+    sys_put_le32(runtime->definition.binding.param2, &record[40]);
+    sys_put_le32(runtime->definition.layer_mask, &record[44]);
+    sys_put_le16(runtime->definition.timeout_ms, &record[48]);
+    sys_put_le16(runtime->definition.require_prior_idle_ms == 0 ? UINT16_MAX
+                                                                 : runtime->definition.require_prior_idle_ms,
+                 &record[50]);
+    rawhid_app_behavior_identity_hash(&runtime->definition.binding,
+                                      &record[RAWHID_APP_COMBO_SETTINGS_IDENTITY_OFFSET],
+                                      RAWHID_APP_COMBO_SETTINGS_IDENTITY_LEN);
+    sys_put_le32(crc32_ieee(record, RAWHID_APP_COMBO_SETTINGS_SLOT_CRC_LEN),
+                 &record[RAWHID_APP_COMBO_SETTINGS_SLOT_CRC_OFFSET]);
+    return 0;
+}
+
+static void combo_settings_encode_header(uint32_t rewritten_slots, bool build_full_table) {
+    uint32_t occupied = build_full_table ? rawhid_app_combo_runtime_occupied_mask()
+                                         : sys_get_le32(&combo_settings_table[8]);
+    if (!build_full_table) {
+        for (uint8_t slot = 0; slot < RAWHID_APP_COMBO_RUNTIME_MAX_SLOTS; slot++) {
+            if ((rewritten_slots & BIT(slot)) == 0) {
+                continue;
+            }
+            if (combo_slot(slot) != NULL) {
+                occupied |= BIT(slot);
+            } else {
+                occupied &= ~BIT(slot);
+            }
+        }
+    }
+    memcpy(combo_settings_table, "KCMB", 4);
+    combo_settings_table[4] = 1;
+    combo_settings_table[5] = RAWHID_APP_COMBO_SETTINGS_SLOT_LEN;
+    combo_settings_table[6] = RAWHID_APP_COMBO_SETTINGS_SLOT_COUNT;
+    combo_settings_table[7] = 0;
+    sys_put_le32(occupied, &combo_settings_table[8]);
+    sys_put_le32(crc32_ieee(combo_settings_table, RAWHID_APP_COMBO_SETTINGS_HEADER_CRC_OFFSET),
+                 &combo_settings_table[RAWHID_APP_COMBO_SETTINGS_HEADER_CRC_OFFSET]);
 }
 
 static bool combo_settings_binding_from_record(const uint8_t *record,
@@ -892,8 +1153,18 @@ static int combo_settings_set(const char *name, size_t len, settings_read_cb rea
     return 0;
 }
 
+static int combo_settings_reload_direct(const char *name, size_t len, settings_read_cb read_cb,
+                                        void *cb_arg, void *param) {
+    ARG_UNUSED(param);
+    return combo_settings_set(name, len, read_cb, cb_arg);
+}
+#endif
+
 static int combo_settings_commit(void) {
     combo_diagnostics = (struct rawhid_app_combo_runtime_diagnostics){0};
+    combo_dirty_slots = 0;
+    combo_metadata_repair_pending = false;
+    combo_settings_baseline_refresh_required = false;
     /* Every production and fixture load starts from the same safe default state. */
     int defaults_rc = combo_runtime_build_defaults();
     if (defaults_rc != 0) {
@@ -948,12 +1219,64 @@ static int combo_settings_commit(void) {
 }
 
 #if IS_ENABLED(CONFIG_RAWHID_APP_COMBO_SETTINGS_TEST)
+void rawhid_app_combo_settings_test_storage(uint8_t *image, size_t length, bool present,
+                                            bool read_error, int write_result,
+                                            bool commit_on_write_error) {
+    combo_settings_test_persisted = image;
+    combo_settings_test_persisted_length = length;
+    combo_settings_test_persisted_present = present;
+    combo_settings_test_storage_read_error = read_error;
+    combo_settings_test_write_result = write_result;
+    combo_settings_test_commit_on_write_error = commit_on_write_error;
+    combo_settings_test_writes = 0;
+}
+
+unsigned int rawhid_app_combo_settings_test_write_count(void) {
+    return combo_settings_test_writes;
+}
+
+static int combo_settings_refresh_baseline(void) {
+    if (combo_settings_test_storage_read_error || !combo_settings_test_persisted_present ||
+        combo_settings_test_persisted == NULL ||
+        combo_settings_test_persisted_length != RAWHID_APP_COMBO_SETTINGS_TABLE_LEN ||
+        combo_settings_table == NULL) {
+        return -EIO;
+    }
+    memcpy(combo_settings_table, combo_settings_test_persisted,
+           RAWHID_APP_COMBO_SETTINGS_TABLE_LEN);
+    return 0;
+}
+#endif
+
+#if IS_ENABLED(CONFIG_RAWHID_APP_COMBO_SETTINGS)
+static int combo_settings_refresh_baseline(void) {
+    combo_settings_record_seen = false;
+    combo_settings_read_error = false;
+    combo_settings_length_invalid = false;
+    int rc = settings_load_subtree_direct(RAWHID_APP_COMBO_SETTINGS_SUBTREE,
+                                          combo_settings_reload_direct, NULL);
+    if (rc != 0 || combo_settings_read_error || combo_settings_length_invalid ||
+        !combo_settings_record_seen) {
+        return -EIO;
+    }
+    return 0;
+}
+#endif
+
+#if IS_ENABLED(CONFIG_RAWHID_APP_COMBO_SETTINGS_TEST)
 static int combo_settings_test_begin(void) {
     combo_settings_record_seen = false;
     combo_settings_read_error = false;
     combo_settings_length_invalid = false;
-    memset(combo_settings_table, 0, sizeof(combo_settings_table));
+    combo_settings_table = combo_settings_test_scratch_length == RAWHID_APP_COMBO_SETTINGS_TABLE_LEN
+                               ? combo_settings_test_scratch
+                               : NULL;
     return 0;
+}
+
+void rawhid_app_combo_settings_test_scratch(uint8_t *image, size_t length) {
+    combo_settings_test_scratch = image;
+    combo_settings_test_scratch_length = length;
 }
 
 int rawhid_app_combo_settings_test_load_image(const uint8_t *image, size_t length) {
@@ -964,10 +1287,12 @@ int rawhid_app_combo_settings_test_load_image(const uint8_t *image, size_t lengt
             return -EINVAL;
         }
         combo_settings_length_invalid = true;
-    } else if (length != sizeof(combo_settings_table)) {
+    } else if (length != RAWHID_APP_COMBO_SETTINGS_TABLE_LEN) {
         combo_settings_length_invalid = true;
-    } else {
-        memcpy(combo_settings_table, image, sizeof(combo_settings_table));
+    } else if (combo_settings_table == NULL) {
+        combo_settings_length_invalid = true;
+    } else if (image != combo_settings_table) {
+        memcpy(combo_settings_table, image, RAWHID_APP_COMBO_SETTINGS_TABLE_LEN);
     }
     return combo_settings_commit();
 }
@@ -985,27 +1310,111 @@ int rawhid_app_combo_settings_test_load_read_error(void) {
 }
 #endif
 
+#if IS_ENABLED(CONFIG_RAWHID_APP_COMBO_SETTINGS)
 SETTINGS_STATIC_HANDLER_DEFINE_WITH_CPRIO(rawhid_app_combo_runtime,
                                           RAWHID_APP_COMBO_SETTINGS_SUBTREE, NULL,
                                           combo_settings_set, combo_settings_commit, NULL, 11);
 #endif
-
-bool rawhid_app_combo_runtime_get_stale_item(uint8_t slot, uint8_t item[52]) {
+int rawhid_app_combo_runtime_get_stale_item(uint8_t slot, uint8_t item[52]) {
+    if (combo_settings_baseline_refresh_required) {
+        return -EIO;
+    }
     if (item == NULL || slot >= RAWHID_APP_COMBO_RUNTIME_MAX_SLOTS ||
         (combo_diagnostics.stale_slots & BIT(slot)) == 0) {
-        return false;
+        return 0;
     }
     const uint8_t *record = combo_settings_slot(slot);
     item[0] = slot;
     memcpy(&item[1], &record[1], RAWHID_APP_COMBO_WIRE_ITEM_LEN - 1);
-    return true;
+    return 1;
 }
-#else
-bool rawhid_app_combo_runtime_get_stale_item(uint8_t slot, uint8_t item[52]) {
+
+int rawhid_app_combo_runtime_discard(void) {
+#if IS_ENABLED(CONFIG_RAWHID_APP_COMBO_SETTINGS_TEST)
+    if (combo_settings_baseline_refresh_required && combo_settings_refresh_baseline() != 0) {
+        return -EIO;
+    }
+#endif
+#if IS_ENABLED(CONFIG_RAWHID_APP_COMBO_SETTINGS)
+    if (combo_settings_baseline_refresh_required) {
+        /* The normal Settings handler owns the same single buffer. Reloading
+         * through it before commit resolves old-vs-new without a shadow copy. */
+        if (combo_settings_refresh_baseline() != 0) {
+            return -EIO;
+        }
+    }
+#endif
+    return combo_settings_commit();
+}
+
+int rawhid_app_combo_runtime_save(void) {
+    if (!rawhid_app_combo_runtime_dirty()) {
+        return 0;
+    }
+    /* A read-error fallback has no trustworthy image to merge with.  A later
+     * settings reload must establish it before a mutation can be persisted. */
+    if (combo_diagnostics.flags & RAWHID_APP_COMBO_SETTINGS_FLAGS_READ_ERROR_FALLBACK) {
+        return -EIO;
+    }
+    bool build_full_table =
+        (combo_diagnostics.flags & RAWHID_APP_COMBO_SETTINGS_FLAGS_SAVED_TABLE_LOADED) == 0;
+    if (build_full_table) {
+        memset(combo_settings_table, 0, RAWHID_APP_COMBO_SETTINGS_TABLE_LEN);
+        for (uint8_t slot = 0; slot < RAWHID_APP_COMBO_RUNTIME_MAX_SLOTS; slot++) {
+            int rc = combo_settings_encode_runtime_slot(slot);
+            if (rc != 0) {
+                return rc;
+            }
+        }
+    } else {
+        for (uint8_t slot = 0; slot < RAWHID_APP_COMBO_RUNTIME_MAX_SLOTS; slot++) {
+            if ((combo_dirty_slots & BIT(slot)) == 0) {
+                continue;
+            }
+            int rc = combo_settings_encode_runtime_slot(slot);
+            if (rc != 0) {
+                return rc;
+            }
+        }
+    }
+    combo_settings_encode_header(combo_dirty_slots, build_full_table);
+#if IS_ENABLED(CONFIG_RAWHID_APP_COMBO_SETTINGS)
+    int rc = settings_save_one(RAWHID_APP_COMBO_SETTINGS_SUBTREE "/" RAWHID_APP_COMBO_SETTINGS_TABLE_NAME,
+                               combo_settings_table, RAWHID_APP_COMBO_SETTINGS_TABLE_LEN);
+    if (rc != 0) {
+        combo_settings_baseline_refresh_required = combo_settings_refresh_baseline() != 0;
+        return rc;
+    }
+#elif IS_ENABLED(CONFIG_RAWHID_APP_COMBO_SETTINGS_TEST)
+    combo_settings_test_writes++;
+    if (combo_settings_test_persisted != NULL &&
+        (combo_settings_test_write_result == 0 || combo_settings_test_commit_on_write_error)) {
+        memcpy(combo_settings_test_persisted, combo_settings_table,
+               RAWHID_APP_COMBO_SETTINGS_TABLE_LEN);
+        combo_settings_test_persisted_length = RAWHID_APP_COMBO_SETTINGS_TABLE_LEN;
+        combo_settings_test_persisted_present = true;
+    }
+    if (combo_settings_test_write_result != 0) {
+        combo_settings_baseline_refresh_required = combo_settings_refresh_baseline() != 0;
+        return combo_settings_test_write_result;
+    }
+#endif
+    /* Reclassify the exact image just written; it also makes the new image the
+     * sole saved baseline and clears dirty only after the synchronous write. */
+    combo_settings_record_seen = true;
+    combo_settings_read_error = false;
+    combo_settings_length_invalid = false;
+    return combo_settings_commit();
+}
+#endif
+#if !IS_ENABLED(CONFIG_RAWHID_APP_COMBO_SETTINGS_CORE)
+int rawhid_app_combo_runtime_get_stale_item(uint8_t slot, uint8_t item[52]) {
     ARG_UNUSED(slot);
     ARG_UNUSED(item);
-    return false;
+    return 0;
 }
+int rawhid_app_combo_runtime_discard(void) { return -ENOTSUP; }
+int rawhid_app_combo_runtime_save(void) { return -ENOTSUP; }
 #endif
 
 static int combo_runtime_init(void) {

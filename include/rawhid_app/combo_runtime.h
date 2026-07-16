@@ -38,15 +38,23 @@ struct rawhid_app_combo_runtime_diagnostics {
     uint32_t invalid_slots;
 };
 
-/* Read-only Phase 1C API. Mutation is intentionally not connected yet. */
 void rawhid_app_combo_runtime_get_limits(struct rawhid_app_combo_runtime_limits *limits);
 uint32_t rawhid_app_combo_runtime_occupied_mask(void);
 bool rawhid_app_combo_runtime_get(uint8_t slot,
                                   struct rawhid_app_combo_runtime_definition *definition);
 int rawhid_app_combo_runtime_validate(const struct rawhid_app_combo_runtime_definition *definition,
                                       int replacing_slot);
+/* These operations only change the runtime table; persistence is a later lifecycle step. */
+int rawhid_app_combo_runtime_upsert(uint8_t slot,
+                                    const struct rawhid_app_combo_runtime_definition *definition);
+int rawhid_app_combo_runtime_delete(uint8_t slot);
+bool rawhid_app_combo_runtime_dirty(void);
+int rawhid_app_combo_runtime_discard(void);
+int rawhid_app_combo_runtime_reset_to_keymap(void);
+int rawhid_app_combo_runtime_save(void);
 bool rawhid_app_combo_runtime_keys_pressed(void);
 bool rawhid_app_combo_runtime_idle(void);
 void rawhid_app_combo_runtime_get_diagnostics(struct rawhid_app_combo_runtime_diagnostics *diagnostics);
 /* Returns the saved wire item only for a structurally valid stale record. */
-bool rawhid_app_combo_runtime_get_stale_item(uint8_t slot, uint8_t item[52]);
+/* 1=item, 0=no stale item, -EIO=stored baseline is currently unavailable. */
+int rawhid_app_combo_runtime_get_stale_item(uint8_t slot, uint8_t item[52]);
