@@ -1,34 +1,31 @@
 # zmk-rawhid-app
 
-ホスト PC と ZMK キーボード（ドングル / セントラル）を **RawHID** で双方向通信するための
-**アプリ層プロトコルモジュール**。[zmk-raw-hid](https://github.com/hrmt-lab/zmk-raw-hid)
-（トランスポート）が発火する `raw_hid_received_event` を購読し、パケットを解析して
+[English](README_EN.md)
 
-- **HELLO**: 疎通確認 probe への応答
-- **APP_LAYER**: ホストからの ZMK レイヤー制御
-- **TIME_SYNC**: ホスト時刻の同期・保持
-- **AI_USAGE**: Claude Code / Codex 使用率の保持
-- **CONFIG_RPC**: ZMK Studio 用の encoder runtime override の編集・保存、および
-  read-only Combo runtime の照会
+[ホスト PC](https://github.com/hrmt-lab/Keylink-Studio) と ZMK キーボード（ドングル / セントラル）を
+**RawHID** で双方向連携させる ZMK モジュール。組み込むと、キーボードで次のことが
+できるようになります。
 
-を行い、解析結果を getter で他モジュール（例: Prospector ディスプレイ）へ公開します。
-
-さらに、デバイス → ホストの **uplink**（device-initiated packet）として
-
-- **BATTERY_STATUS**: Central/Self / ペリフェラルのバッテリー残量
-- **HOST_ACTION**: キーから PC 側操作をトリガーする（`&host_action` behavior）
-- **KEY_STATS**: キー位置ごとの打鍵数（キーの内容は送らない）
-- **LAYER_STATE**: 現在の最上位レイヤーと layer mask（表示用）
-- **KEY_PRESS**: キー位置ごとの押下・離上イベント
-
-を送信できます。いずれも `DEVICE_HELLO` の capability bit で個別に有効化されます。
+- **ディスプレイ表示の強化**: ホストの時刻、AI 使用率（Claude Code / Codex）、
+  Central / ペリフェラルのバッテリー残量を、Prospector などのディスプレイに表示できます
+- **ホストからのレイヤー切り替え**: アクティブなアプリに応じたレイヤー自動切り替えなど、
+  PC 側からキーボードのレイヤーを制御できます（現在レイヤーのホストへの通知も可能）
+- **キーから PC を操作**: キーに `&host_action` を割り当て、ウィンドウ表示や
+  アプリ起動などの PC 側アクションを実行できます
+- **打鍵の可視化**: キー位置ごとの打鍵数や押下イベントをホストへ送り、
+  ヒートマップなどの統計表示に使えます（キーの内容は送りません）
+- **Keylink Studio からの設定変更**: ZMK StudioではできないエンコーダやComboの編集・保存が再ビルドなしで行えます
 
 キーボード固有コードは不要で、**モジュール追加 + CONFIG 有効化だけ**で組み込めます。
-（uplink を使う場合のみ、`HOST_ACTION` の keymap binding と各機能の `.conf` 追加が必要です。）
+（uplink を使う場合のみ、`&host_action` の keymap 割り当てと各機能の `.conf` 追加が必要です。）
+
+トランスポート層には [zmk-raw-hid](https://github.com/hrmt-lab/zmk-raw-hid) を使用し、
+本モジュールはそのアプリ層プロトコル（Host Link v2）を実装します。各機能は
+`DEVICE_HELLO` の capability bit で個別に有効化されます。
 
 ---
 
-## 取り込み方
+## インストール
 
 `config/west.yml` に追加:
 
@@ -54,7 +51,7 @@ include:
     shield: <keyboard>_dongle raw_hid_adapter   # 表示するなら prospector_adapter も
 ```
 
-ドングルの `.conf`:
+`.conf`:
 
 ```ini
 CONFIG_RAW_HID=y
@@ -78,28 +75,31 @@ CONFIG_RAWHID_APP_CONFIG_RPC=y
 
 ## CONFIG
 
-| CONFIG | 説明 |
-|---|---|
-| `RAWHID_APP` | RawHID アプリ層を有効化（依存: `RAW_HID`）。HELLO 応答 |
-| `RAWHID_APP_LAYER_CONTROL` | APP_LAYER（ホストからのレイヤー制御） |
-| `RAWHID_APP_TIME_SYNC` | TIME_SYNC（時刻同期＋getter） |
-| `RAWHID_APP_AI_USAGE` | AI_USAGE（使用率保持＋getter） |
-| `RAWHID_APP_LAYER_STATE_REPORT` | LAYER_STATE uplink（現在レイヤーと mask） |
-| `RAWHID_APP_BATTERY_REPORT` | BATTERY_STATUS uplink（Central/Self とペリフェラル残量） |
-| `RAWHID_APP_HOST_ACTION` | HOST_ACTION uplink（`&host_action <id> <value>`） |
-| `RAWHID_APP_KEY_STATS` | KEY_STATS uplink（`uint16_t * ZMK_KEYMAP_LEN` の RAM を使用） |
-| `RAWHID_APP_KEY_PRESS` | KEY_PRESS uplink（押下/離上イベントを即時送信） |
-| `RAWHID_APP_CONFIG_RPC` | Config RPC の ENCODER feature（編集・settings保存）を有効化。Combo runtime有効時はCombo featureの照会も提供 |
-| `RAWHID_APP_COMBO_RUNTIME` | Keylink runtime Combo engine。ドングルの overlay で `/combos` を `status = "disabled"` にして有効化 |
-| `RAWHID_APP_COMBO_SETTINGS` | Combo Settings table をNVSへ保存・読込。Combo runtimeとConfig RPCが必要 |
+いずれもキーボード側 config（`zmk-config-xxx` の `.conf`）に `CONFIG_` プレフィックス付きで設定します。
+デフォルトはすべて `n` で、サブ機能をどれか1つ有効にすると `RAWHID_APP` 本体は自動で有効になります。
+
+| CONFIG | デフォルト | 説明 |
+|---|---|---|
+| `RAWHID_APP` | `n` | RawHID アプリ層を有効化（依存: `RAW_HID`）。HELLO 応答 |
+| `RAWHID_APP_LAYER_CONTROL` | `n` | APP_LAYER（ホストからのレイヤー制御） |
+| `RAWHID_APP_TIME_SYNC` | `n` | TIME_SYNC（時刻同期＋getter） |
+| `RAWHID_APP_AI_USAGE` | `n` | AI_USAGE（使用率保持＋getter） |
+| `RAWHID_APP_LAYER_STATE_REPORT` | `n` | LAYER_STATE uplink（現在レイヤーと mask） |
+| `RAWHID_APP_BATTERY_REPORT` | `n` | BATTERY_STATUS uplink（Central/Self とペリフェラル残量） |
+| `RAWHID_APP_HOST_ACTION` | `n` | HOST_ACTION uplink（`&host_action <id> <value>`） |
+| `RAWHID_APP_KEY_STATS` | `n` | KEY_STATS uplink（`uint16_t * ZMK_KEYMAP_LEN` の RAM を使用） |
+| `RAWHID_APP_KEY_PRESS` | `n` | KEY_PRESS uplink（押下/離上イベントを即時送信） |
+| `RAWHID_APP_CONFIG_RPC` | `n` | Config RPC の ENCODER feature（編集・settings保存）を有効化。Combo runtime有効時はCombo featureの照会も提供 |
+| `RAWHID_APP_COMBO_RUNTIME` | `n` | Keylink runtime Combo engine。overlay で `/combos` を `status = "disabled"` にして有効化 |
+| `RAWHID_APP_COMBO_SETTINGS` | `n` | Combo Settings table をNVSへ保存・読込。Combo runtimeとConfig RPCが必要 |
 
 `CONFIG_RAWHID_APP_COMBO_RUNTIME=y` を有効にする場合は、Combo の定義自体は通常どおり
-キーボードの `.keymap` ファイルに記載し、`status = "disabled"` の上書きだけをドングルの
-overlay（例: `<keyboard>_dongle.overlay`）に記載してください。`.keymap` 側で `/combos` を
-無効化してはいけません。
+キーボードの `.keymap` ファイルに記載し、`status = "disabled"` の上書きだけを
+overlay（例: Central 側の `<keyboard>_left.overlay`）に記載してください。`.keymap` 側で
+`/combos` を無効化してはいけません。
 
 ```dts
-// <keyboard>_dongle.overlay
+// 例: <keyboard>_left.overlay（Central 側）
 / {
     combos {
         status = "disabled";
@@ -107,15 +107,17 @@ overlay（例: `<keyboard>_dongle.overlay`）に記載してください。`.key
 };
 ```
 
-これにより、Keylink runtime を使用するドングルでは ZMK 標準の Combo listener を生成せず、
-ZMK 標準と Keylink runtime の両方が同じキーイベントを処理することを防ぎます。一方、ドングル以外の
-ビルドまで `/combos` が無効化されることはありません。ノードを削除するのではなくドングルの overlay で
-無効化することで、`/combos` の子ノードは Devicetree 上に残り、Keylink runtime が初期 Combo 定義として
-利用できます。
+これにより、Keylink runtime を使用するビルドでは ZMK 標準の Combo listener を生成せず、
+ZMK 標準と Keylink runtime の両方が同じキーイベントを処理することを防ぎます。一方、overlay を
+適用しない他のビルドまで `/combos` が無効化されることはありません。ノードを削除するのではなく
+overlay で無効化することで、`/combos` の子ノードは Devicetree 上に残り、Keylink runtime が
+初期 Combo 定義として利用できます。
 
 ---
 
 ## 各機能の使い方
+
+各機能を有効にする `CONFIG_RAWHID_APP_*` の一覧とデフォルト値は、前掲の「CONFIG」表を参照してください。
 
 ヘッダはモジュールの `include/` にあり、ビルドに含めれば `<rawhid_app/...>` で参照できます。
 `time_sync.h` と `ai_usage.h` のgetterには、機能CONFIGが無効な場合の inline スタブがあります。
@@ -161,7 +163,7 @@ keymap 例（任意のレイヤーのキーに割り当てる）:
 
 `action_id` の意味（ウィンドウ表示・監視停止・アプリ起動など）は**ホスト側 config の許可リスト**で
 デバイス単位に定義します。firmware は `action_id` / `value` をそのまま送るだけで、意味づけはしません。
-ここで決めた `action_id` を、RawHID Host アプリの **「アクション」画面**（`docs/manual-app-usage.md` の
+ここで決めた `action_id` を、[Keylink Studio](https://github.com/hrmt-lab/Keylink-Studio) アプリの **「アクション」画面**（`docs/manual-app-usage.md` の
 「アクション」セクション）で同じ番号に対して動作を割り当ててください。両側の `action_id` が一致して
 初めて動作します。
 
@@ -223,7 +225,7 @@ Combo runtimeだけでもkeymap由来の定義を読み取り専用で利用で�
 CONFIG_RAWHID_APP_BATTERY_REPORT=y
 ```
 
-ZMK のバッテリーイベントを購読し、Central/Self とペリフェラルの残量を送信します。
+ZMK のバッテリーイベントを受け取り、Central/Self とペリフェラルの残量を送信します。
 残量変化時に加えて約5分周期でも送り、未取得・非対応・split 切断時は
 `0xFF`（unknown / not available / disconnected）を送ります。キーマップやCコードの追加は不要です。
 
@@ -234,7 +236,7 @@ USB 給電 dongle のように Central/Self の残量が取れない構成では
 
 ペリフェラルが未接続または電源OFFの間は、firmware 側の該当 level は `0xFF` のままです。
 これは packet が届いていない状態ではなく、`BATTERY_STATUS` の level が unknown であることを示します。
-ペリフェラルが接続され、`zmk_peripheral_battery_state_changed` が発火すると `0..100` の実残量が送信されます。
+ペリフェラルが接続され、`zmk_peripheral_battery_state_changed` が通知されると `0..100` の実残量が送信されます。
 
 ### キー統計（KEY_STATS uplink）
 
@@ -244,7 +246,7 @@ USB 給電 dongle のように Central/Self の残量が取れない構成では
 CONFIG_RAWHID_APP_KEY_STATS=y
 ```
 
-`position_state_changed` を購読してキー位置ごとの押下回数を数え、約45秒周期で**非ゼロの位置だけ**を
+`position_state_changed` を受け取ってキー位置ごとの押下回数を数え、約45秒周期で**非ゼロの位置だけ**を
 送信して 0 にクリアします。送るのは「位置と回数」だけで、キーの内容（何を入力したか）は送りません。
 `uint16_t * ZMK_KEYMAP_LEN` の RAM を使うため、RAM に余裕がない構成では有効化前に使用量を確認してください。
 
@@ -256,7 +258,7 @@ CONFIG_RAWHID_APP_KEY_STATS=y
 CONFIG_RAWHID_APP_LAYER_STATE_REPORT=y
 ```
 
-`layer_state_changed` を購読し、最上位アクティブレイヤーと layer mask をホストへ送ります（約50ms デバウンス）。
+`layer_state_changed` を受け取り、最上位アクティブレイヤーと layer mask をホストへ送ります（約50ms デバウンス）。
 ホストはこれを**表示専用**に使い、APP_LAYER としてエコーバックしません。キーマップやCコードの追加は不要です。
 
 ### uplink 共通の挙動
@@ -531,7 +533,7 @@ include/rawhid_app/
   behavior_identity.h … settings record用behavior identity hash
   combo_runtime.h … read-only Combo runtime API
 src/
-  dispatch.c    … raw_hid_received_event 購読・検証・分岐・HELLO応答
+  dispatch.c    … raw_hid_received_event 受信・検証・分岐・HELLO応答
   layer_control.c
   time_sync.c
   ai_usage.c
