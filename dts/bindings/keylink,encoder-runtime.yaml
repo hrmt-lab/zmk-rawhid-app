@@ -1,0 +1,13 @@
+description: Keylink encoder runtime pointing configuration
+
+compatible: "keylink,encoder-runtime"
+
+properties:
+  scroll-value:
+    type: int
+    required: true
+    description: Value used by ZMK_POINTING_DEFAULT_SCRL_VAL for &msc bindings.
+  sensor-behavior:
+    type: phandle
+    required: true
+    description: The zmk,behavior-sensor-rotate-var node whose tap-ms is used for runtime overrides.

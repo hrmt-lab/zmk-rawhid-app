@@ -598,16 +598,9 @@ Modifier-only key は、Left/Right Ctrl、Shift、Alt、GUI など、単独で�
 
 `zmk,behavior-input-two-axis` (`&mmv` / `&msc`) は press 中の経過時間に基づき周期 tick で relative input を生成する behavior である。encoder detent で `press -> 即 release` の tap-like invoke を行うと経過時間がほぼ 0 になり、移動量やスクロール量が出ない。
 
-Firmware は encoder override 実行時、binding が `zmk,behavior-input-two-axis` の behavior device を指す場合に限り、通常の `zmk_behavior_invoke_binding()` を使わず、detent ごとの discrete relative input event をその behavior device から `input_report_rel()` で送ってよい。この場合も `&mmv` / `&msc` 用の既存 `zmk,input-listener` と input processor pipeline を通るため、新しい devicetree node は不要である。
+Firmware は encoder override 実行時、標準の `behavior-sensor-rotate` と同じく、各triggerに`zmk_behavior_queue_add(press, tap-ms)`と`zmk_behavior_queue_add(release, 0)`を追加する。`&msc` / `&mmv`の周期タイマーはこの押下時間中に実行されるため、直接の`input_report_rel()`や固定detent変換は使わない。
 
-MVP の discrete 量は以下とする。
-
-- Raw sensor steps はそのまま detent と見なさず、4 steps を 1 detent として扱う。override が存在する encoder では、1 detent に満たない raw event は Firmware が `HANDLED` として消費し、標準 `sensor-bindings` へ fallback させない。
-- `INPUT_REL_WHEEL` / `INPUT_REL_HWHEEL`: detent を蓄積し、2 detent あたり `+1` または `-1` notch
-- `INPUT_REL_X` / `INPUT_REL_Y`: `MOVE_*` の packed 値を `20` で割った値
-- 1 つの sensor event に複数 detents 相当の raw steps が含まれる場合は、その detent 数だけ実行する
-
-この量は実機チューニング対象であり、必要になった場合は Kconfig 化する。
+`tap-ms`は`.keymap`の`keylink,encoder-runtime.sensor-behavior`が参照するsensor behaviorから取得する。`keylink,encoder-runtime.scroll-value`には同じ`.keymap`の`ZMK_POINTING_DEFAULT_SCRL_VAL`を渡し、HostのMouse Scroll pickerと`&msc`の値を一致させる。
 
 ## ENCODER GET_INFO
 
@@ -623,7 +616,7 @@ MVP の discrete 量は以下とする。
 
 ### Response Payload
 
-`payload_len = 4`
+従来firmwareの応答は`payload_len = 4`。Pointing設定bridgeを持つfirmwareは`payload_len = 8`を返す。Hostは4 byte応答を受け入れ、従来互換として`±10`を使う。
 
 | Payload Offset | Size | Field | Type | Notes |
 | --- | ---: | --- | --- | --- |
@@ -631,6 +624,8 @@ MVP の discrete 量は以下とする。
 | `1` | 1 | `encoder_count` | u8 | Physical encoder slot count. 全 layer 共通 |
 | `2` | 1 | `capabilities` | u8 | Encoder capability bits |
 | `3` | 1 | `reserved` | u8 | must be zero |
+| `4..5` | 2 | `scroll_value` | u16 LE | `ZMK_POINTING_DEFAULT_SCRL_VAL`。8 byte応答でのみ存在 |
+| `6..7` | 2 | `encoder_tap_ms` | u16 LE | 参照sensor behaviorの`tap-ms`。8 byte応答でのみ存在 |
 
 `encoder_count` は `zmk,keymap-sensors` に登録された sensor 要素数から算出し、全 layer 共通とする。有効な `encoder_id` は `0..encoder_count-1` である。`encoder_id` は `zmk,keymap-sensors` の sensor 配列順 index とする。layer ごとの `sensor-bindings` 数や有無から `encoder_count` を算出してはならない。layer ごとに通常 ZMK の `sensor-bindings` が存在しない場合でも、その `encoder_id` は Host Link Config RPC 上は有効とする。
 

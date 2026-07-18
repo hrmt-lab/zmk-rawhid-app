@@ -173,6 +173,22 @@ keymap 例（任意のレイヤーのキーに割り当てる）:
 CONFIG_RAWHID_APP_CONFIG_RPC=y
 ```
 
+Keylink Studioでエンコーダにマウススクロールを割り当て、`.keymap`と同じスクロール量と
+押下時間を使用する場合は、`.keymap`に次のbridgeノードも追加します。
+
+```dts
+keylink_encoder_runtime: keylink_encoder_runtime {
+    compatible = "keylink,encoder-runtime";
+    scroll-value = <ZMK_POINTING_DEFAULT_SCRL_VAL>;
+    sensor-behavior = <&inc_dec_ms>;
+};
+```
+
+`ZMK_POINTING_DEFAULT_SCRL_VAL` は`.keymap`で定義した既存のスクロール量、
+`&inc_dec_ms` は`tap-ms`を設定した既存のsensor behaviorを参照します。値をここへ
+重複して書く必要はありません。このノードはKeylink Studio用に設定値をrawhid-appへ
+渡すだけで、通常の`sensor-bindings`を置き換えず、ZMK本体の変更も不要です。
+
 Host Link v2のConfig RPCで、encoderごとにCW/CCWのruntime overrideを編集できます。
 ENCODER featureは `GET_INFO`、`GET_BINDINGS`、`SET_BINDINGS`、`GET_DIRTY`、`SAVE`、`DISCARD`、
 `CLEAR_OVERRIDE` をサポートします。`SET_BINDINGS` はRAM上の変更だけを行い、`SAVE` がsettings/NVSへ

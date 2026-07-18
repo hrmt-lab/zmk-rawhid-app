@@ -5,9 +5,8 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include <zephyr/device.h>
+#include <zephyr/devicetree.h>
 #include <zephyr/drivers/sensor.h>
-#include <zephyr/input/input.h>
 #include <zephyr/logging/log.h>
 #include <zephyr/settings/settings.h>
 #include <zephyr/sys/byteorder.h>
@@ -16,6 +15,7 @@
 
 #include <drivers/behavior.h>
 #include <zmk/behavior.h>
+#include <zmk/behavior_queue.h>
 #include <zmk/event_manager.h>
 #include <zmk/events/position_state_changed.h>
 #include <zmk/events/sensor_event.h>
@@ -49,8 +49,12 @@ LOG_MODULE_DECLARE(zmk, CONFIG_ZMK_LOG_LEVEL);
 #define RAWHID_APP_ENCODER_RECORD_MAGIC_1 'E'
 #define RAWHID_APP_ENCODER_RECORD_VERSION 1
 #define RAWHID_APP_ENCODER_RECORD_HASH_LEN 16
-#define RAWHID_APP_ENCODER_POINTER_MOVE_DIVISOR 20
-#define RAWHID_APP_ENCODER_SCROLL_DETENTS_PER_NOTCH 2
+#if DT_HAS_COMPAT_STATUS_OKAY(keylink_encoder_runtime)
+#define RAWHID_APP_ENCODER_RUNTIME_NODE DT_COMPAT_GET_ANY_STATUS_OKAY(keylink_encoder_runtime)
+#define RAWHID_APP_ENCODER_SCROLL_VALUE DT_PROP(RAWHID_APP_ENCODER_RUNTIME_NODE, scroll_value)
+#define RAWHID_APP_ENCODER_TAP_MS \
+    DT_PROP(DT_PHANDLE(RAWHID_APP_ENCODER_RUNTIME_NODE, sensor_behavior), tap_ms)
+#endif
 
 #define RAWHID_APP_ENCODER_RECORD_MAGIC 0
 #define RAWHID_APP_ENCODER_RECORD_VERSION_OFFSET 2
@@ -81,24 +85,6 @@ enum rawhid_app_encoder_saved_state {
     RAWHID_APP_ENCODER_SAVED_INVALID,
 };
 
-#if DT_HAS_COMPAT_STATUS_OKAY(zmk_behavior_input_two_axis)
-struct rawhid_app_encoder_two_axis_target {
-    const struct device *dev;
-    uint16_t x_code;
-    uint16_t y_code;
-};
-
-#define RAWHID_APP_ENCODER_TWO_AXIS_TARGET(node_id)                                                  \
-    {                                                                                                \
-        .dev = DEVICE_DT_GET(node_id),                                                               \
-        .x_code = DT_PROP(node_id, x_input_code),                                                    \
-        .y_code = DT_PROP(node_id, y_input_code),                                                    \
-    },
-
-static const struct rawhid_app_encoder_two_axis_target encoder_two_axis_targets[] = {
-    DT_FOREACH_STATUS_OKAY(zmk_behavior_input_two_axis, RAWHID_APP_ENCODER_TWO_AXIS_TARGET)};
-#endif
-
 struct rawhid_app_encoder_entry {
     bool occupied;
     uint32_t layer_id;
@@ -114,10 +100,6 @@ struct rawhid_app_encoder_entry {
     uint8_t saved_record[RAWHID_APP_ENCODER_RECORD_LEN];
     enum rawhid_app_encoder_saved_state saved_state;
     struct sensor_value sensor_remainder;
-#if DT_HAS_COMPAT_STATUS_OKAY(zmk_behavior_input_two_axis)
-    int16_t two_axis_x_remainder;
-    int16_t two_axis_y_remainder;
-#endif
 };
 
 static struct rawhid_app_encoder_entry encoder_entries[RAWHID_APP_ENCODER_RUNTIME_ENTRY_SLOTS];
@@ -235,9 +217,26 @@ static bool encoder_runtime_matches_saved(const struct rawhid_app_encoder_entry 
 
 static void encoder_runtime_reset_accumulators(struct rawhid_app_encoder_entry *entry) {
     entry->sensor_remainder = (struct sensor_value){0};
-#if DT_HAS_COMPAT_STATUS_OKAY(zmk_behavior_input_two_axis)
-    entry->two_axis_x_remainder = 0;
-    entry->two_axis_y_remainder = 0;
+}
+
+bool rawhid_app_encoder_runtime_get_pointing_config(uint16_t *scroll_value, uint16_t *tap_ms) {
+#if DT_HAS_COMPAT_STATUS_OKAY(keylink_encoder_runtime)
+    if (RAWHID_APP_ENCODER_SCROLL_VALUE == 0 || RAWHID_APP_ENCODER_SCROLL_VALUE > INT16_MAX ||
+        RAWHID_APP_ENCODER_TAP_MS == 0 || RAWHID_APP_ENCODER_TAP_MS > UINT16_MAX) {
+        return false;
+    }
+
+    if (scroll_value != NULL) {
+        *scroll_value = RAWHID_APP_ENCODER_SCROLL_VALUE;
+    }
+    if (tap_ms != NULL) {
+        *tap_ms = RAWHID_APP_ENCODER_TAP_MS;
+    }
+    return true;
+#else
+    ARG_UNUSED(scroll_value);
+    ARG_UNUSED(tap_ms);
+    return false;
 #endif
 }
 
@@ -867,107 +866,9 @@ encoder_runtime_binding_for_direction(const struct rawhid_app_encoder_entry *ent
     }
 }
 
-#if DT_HAS_COMPAT_STATUS_OKAY(zmk_behavior_input_two_axis)
-static const struct rawhid_app_encoder_two_axis_target *
-encoder_runtime_two_axis_target(const struct zmk_behavior_binding *binding) {
-    if (binding == NULL || binding->behavior_dev == NULL) {
-        return NULL;
-    }
-
-    for (size_t i = 0; i < ARRAY_SIZE(encoder_two_axis_targets); i++) {
-        const struct rawhid_app_encoder_two_axis_target *target = &encoder_two_axis_targets[i];
-        if (device_is_ready(target->dev) && strcmp(binding->behavior_dev, target->dev->name) == 0) {
-            return target;
-        }
-    }
-
-    return NULL;
-}
-
-static int16_t encoder_runtime_decode_move_x(uint32_t param) {
-    return (int16_t)((param >> 16) & 0xffff);
-}
-
-static int16_t encoder_runtime_decode_move_y(uint32_t param) {
-    return (int16_t)(param & 0xffff);
-}
-
-static int16_t encoder_runtime_discrete_pointer_delta(uint16_t code, int16_t value,
-                                                      uint8_t multiplier, int16_t *remainder) {
-    if (value == 0 || multiplier == 0) {
-        return 0;
-    }
-
-    int32_t delta;
-    switch (code) {
-    case INPUT_REL_WHEEL:
-    case INPUT_REL_HWHEEL:
-        if (remainder == NULL) {
-            return 0;
-        }
-        *remainder += (value > 0 ? 1 : -1) * multiplier;
-        delta = *remainder / RAWHID_APP_ENCODER_SCROLL_DETENTS_PER_NOTCH;
-        *remainder %= RAWHID_APP_ENCODER_SCROLL_DETENTS_PER_NOTCH;
-        return (int16_t)CLAMP(delta, INT16_MIN, INT16_MAX);
-    default:
-        delta = value / RAWHID_APP_ENCODER_POINTER_MOVE_DIVISOR;
-        if (delta == 0) {
-            delta = value > 0 ? 1 : -1;
-        }
-        break;
-    }
-
-    delta *= multiplier;
-    return (int16_t)CLAMP(delta, INT16_MIN, INT16_MAX);
-}
-
-static bool encoder_runtime_report_two_axis(const struct zmk_behavior_binding *binding,
-                                            struct rawhid_app_encoder_entry *entry, int steps) {
-    const struct rawhid_app_encoder_two_axis_target *target =
-        encoder_runtime_two_axis_target(binding);
-    if (target == NULL) {
-        return false;
-    }
-
-    uint8_t multiplier = (uint8_t)MIN(abs(steps), UINT8_MAX);
-    int16_t x_value = encoder_runtime_decode_move_x(binding->param1);
-    int16_t y_value = encoder_runtime_decode_move_y(binding->param1);
-    int16_t x_delta =
-        encoder_runtime_discrete_pointer_delta(target->x_code, x_value, multiplier,
-                                               &entry->two_axis_x_remainder);
-    int16_t y_delta =
-        encoder_runtime_discrete_pointer_delta(target->y_code, y_value, multiplier,
-                                               &entry->two_axis_y_remainder);
-
-    bool have_x = x_delta != 0;
-    bool have_y = y_delta != 0;
-    int err = 0;
-
-    if (have_x) {
-        err = input_report_rel(target->dev, target->x_code, x_delta, !have_y, K_NO_WAIT);
-        if (err < 0) {
-            return true;
-        }
-    }
-
-    if (have_y) {
-        input_report_rel(target->dev, target->y_code, y_delta, true, K_NO_WAIT);
-    }
-
-    return true;
-}
-#endif
-
 static int encoder_runtime_invoke_binding(const struct zmk_behavior_binding *binding,
-                                          struct rawhid_app_encoder_entry *entry,
                                           uint8_t layer_id, uint8_t encoder_id,
-                                          int steps, int64_t timestamp) {
-#if DT_HAS_COMPAT_STATUS_OKAY(zmk_behavior_input_two_axis)
-    if (encoder_runtime_report_two_axis(binding, entry, steps)) {
-        return 0;
-    }
-#endif
-
+                                          int64_t timestamp) {
     struct zmk_behavior_binding_event event = {
         .layer = layer_id,
         .position = ZMK_VIRTUAL_KEY_POSITION_SENSOR(encoder_id),
@@ -977,12 +878,15 @@ static int encoder_runtime_invoke_binding(const struct zmk_behavior_binding *bin
 #endif
     };
 
-    int err = zmk_behavior_invoke_binding(binding, event, true);
+    uint16_t tap_ms = 0;
+    (void)rawhid_app_encoder_runtime_get_pointing_config(NULL, &tap_ms);
+
+    int err = zmk_behavior_queue_add(&event, *binding, true, tap_ms);
     if (err < 0) {
         return err;
     }
 
-    return zmk_behavior_invoke_binding(binding, event, false);
+    return zmk_behavior_queue_add(&event, *binding, false, 0);
 }
 
 static int encoder_runtime_listener(const zmk_event_t *eh) {
@@ -1039,8 +943,8 @@ static int encoder_runtime_listener(const zmk_event_t *eh) {
     }
 
     for (uint8_t i = 0; i < MIN(abs(triggers), UINT8_MAX); i++) {
-        int err = encoder_runtime_invoke_binding(binding, entry, active_layer_id, encoder_id,
-                                                 triggers > 0 ? 1 : -1, sensor_ev->timestamp);
+        int err = encoder_runtime_invoke_binding(binding, active_layer_id, encoder_id,
+                                                 sensor_ev->timestamp);
         if (err < 0) {
             LOG_WRN("encoder runtime invoke failed sensor_index=%u layer_id=%u direction=%s err=%d",
                     encoder_id, active_layer_id, encoder_runtime_direction_name(direction), err);

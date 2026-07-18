@@ -55,6 +55,9 @@
 
 /* CONFIG_RPC ENCODER payload offsets. */
 #define RAWHID_APP_CONFIG_ENCODER_GET_INFO_PAYLOAD_LEN 4
+#define RAWHID_APP_CONFIG_ENCODER_GET_INFO_EXTENDED_PAYLOAD_LEN 8
+#define RAWHID_APP_CONFIG_ENCODER_SCROLL_VALUE 4
+#define RAWHID_APP_CONFIG_ENCODER_TAP_MS 6
 #define RAWHID_APP_CONFIG_ENCODER_GET_BINDINGS_REQUEST_LEN 5
 #define RAWHID_APP_CONFIG_ENCODER_GET_BINDINGS_RESPONSE_LEN 28
 #define RAWHID_APP_CONFIG_ENCODER_SET_BINDINGS_REQUEST_LEN 28
@@ -507,13 +510,21 @@ static void handle_config_encoder_get_info(const struct rawhid_app_packet *packe
         return;
     }
 
-    uint8_t payload[RAWHID_APP_CONFIG_ENCODER_GET_INFO_PAYLOAD_LEN] = {
+    uint8_t payload[RAWHID_APP_CONFIG_ENCODER_GET_INFO_EXTENDED_PAYLOAD_LEN] = {
         ZMK_KEYMAP_LAYERS_LEN,
         ZMK_KEYMAP_SENSORS_LEN,
         0,
         0,
     };
-    send_config_response(seq, feature, op, RAWHID_APP_CONFIG_STATUS_OK, payload, sizeof(payload));
+    uint16_t scroll_value;
+    uint16_t tap_ms;
+    uint8_t payload_len = RAWHID_APP_CONFIG_ENCODER_GET_INFO_PAYLOAD_LEN;
+    if (rawhid_app_encoder_runtime_get_pointing_config(&scroll_value, &tap_ms)) {
+        sys_put_le16(scroll_value, &payload[RAWHID_APP_CONFIG_ENCODER_SCROLL_VALUE]);
+        sys_put_le16(tap_ms, &payload[RAWHID_APP_CONFIG_ENCODER_TAP_MS]);
+        payload_len = RAWHID_APP_CONFIG_ENCODER_GET_INFO_EXTENDED_PAYLOAD_LEN;
+    }
+    send_config_response(seq, feature, op, RAWHID_APP_CONFIG_STATUS_OK, payload, payload_len);
 }
 
 static void handle_config_encoder_get_bindings(const struct rawhid_app_packet *packet) {
