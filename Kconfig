@@ -33,6 +33,24 @@ config RAWHID_APP_AI_USAGE
       Handle AI_USAGE (0x10) packets (Codex / Claude Code 5h and 7d usage) and
       expose the latest per-provider state through rawhid_app_ai_usage_get().
 
+config RAWHID_APP_AI_CLIENT_STATE
+    bool "Enable RawHID AI client state core"
+    depends on RAW_HID
+    select RAWHID_APP
+    help
+      Validate and retain AI_CLIENT / STATE_UPDATE packets using arrival-order
+      last-write-wins semantics. The current state expires after 15 seconds
+      without a valid update.
+
+config RAWHID_APP_AI_CLIENT_STATE_RENDERER
+    bool "Declare an AI client state renderer"
+    depends on RAWHID_APP_AI_CLIENT_STATE
+    help
+      Enable this only when the target includes at least one display, LED,
+      vibration, sound, or another renderer that consumes AI client state.
+      CAP_AI_CLIENT_STATE is advertised only when both this option and the
+      AI client state core are enabled.
+
 config RAWHID_APP_BATTERY_REPORT
     bool "Enable RawHID BATTERY_STATUS uplink"
     depends on RAW_HID

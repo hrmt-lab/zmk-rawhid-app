@@ -28,6 +28,12 @@
 #define RAWHID_APP_HELLO_PAYLOAD_LEN 12
 #define RAWHID_APP_HELLO_CAPABILITIES 0   /* u32 LE */
 #define RAWHID_APP_HELLO_DEVICE_UID_HASH 4 /* u64 LE */
+#define RAWHID_APP_AI_CLIENT_STATE_PAYLOAD_LEN 6
+#define RAWHID_APP_AI_CLIENT_STATE_CLIENT_TYPE 0
+#define RAWHID_APP_AI_CLIENT_STATE_CLIENT_VARIANT 1
+#define RAWHID_APP_AI_CLIENT_STATE_SESSION_ACTIVE 2
+#define RAWHID_APP_AI_CLIENT_STATE_ACTIVITY_STATE 3
+#define RAWHID_APP_AI_CLIENT_STATE_REVISION 4
 
 /* APP_LAYER payload offsets. */
 #define RAWHID_APP_APP_LAYER_PAYLOAD_LEN 2
@@ -173,6 +179,7 @@ static bool packet_type_is_known(uint8_t packet_type) {
     case RAWHID_APP_PACKET_KEY_PRESS:
     case RAWHID_APP_PACKET_CONFIG_REQUEST:
     case RAWHID_APP_PACKET_CONFIG_RESPONSE:
+    case RAWHID_APP_PACKET_STATE_UPDATE:
         return true;
     default:
         return false;
@@ -269,6 +276,22 @@ static bool parse_config_request_packet(const uint8_t *data, struct rawhid_app_p
     if (payload_len > 0) {
         memcpy(packet->config_request.payload, payload, payload_len);
     }
+    return true;
+}
+
+static bool parse_ai_client_state_packet(const uint8_t *data,
+                                         struct rawhid_app_packet *packet) {
+    const uint8_t *payload = &data[RAWHID_APP_OFFSET_PAYLOAD];
+    packet->ai_client_state.client_type =
+        payload[RAWHID_APP_AI_CLIENT_STATE_CLIENT_TYPE];
+    packet->ai_client_state.client_variant =
+        payload[RAWHID_APP_AI_CLIENT_STATE_CLIENT_VARIANT];
+    packet->ai_client_state.session_active =
+        payload[RAWHID_APP_AI_CLIENT_STATE_SESSION_ACTIVE];
+    packet->ai_client_state.activity_state =
+        payload[RAWHID_APP_AI_CLIENT_STATE_ACTIVITY_STATE];
+    packet->ai_client_state.revision =
+        sys_get_le16(&payload[RAWHID_APP_AI_CLIENT_STATE_REVISION]);
     return true;
 }
 
@@ -374,7 +397,9 @@ static bool parse_packet(const struct raw_hid_received_event *event,
 
     switch (packet->type) {
     case RAWHID_APP_PACKET_HOST_HELLO:
-        if (payload_len != 0) {
+        if (data[RAWHID_APP_OFFSET_FEATURE] != RAWHID_APP_FEATURE_SYSTEM ||
+            data[RAWHID_APP_OFFSET_OP] != 0 ||
+            data[RAWHID_APP_OFFSET_STATUS_OR_FLAGS] != 0 || payload_len != 0) {
             return false;
         }
         packet->hello.seq = data[RAWHID_APP_OFFSET_SEQ];
@@ -408,6 +433,14 @@ static bool parse_packet(const struct raw_hid_received_event *event,
         return parse_config_request_packet(data, packet, payload_len);
     case RAWHID_APP_PACKET_CONFIG_RESPONSE:
         return true;
+    case RAWHID_APP_PACKET_STATE_UPDATE:
+        if (data[RAWHID_APP_OFFSET_FEATURE] != RAWHID_APP_FEATURE_AI_CLIENT ||
+            data[RAWHID_APP_OFFSET_OP] != 0 ||
+            data[RAWHID_APP_OFFSET_STATUS_OR_FLAGS] != 0 ||
+            payload_len != RAWHID_APP_AI_CLIENT_STATE_PAYLOAD_LEN) {
+            return false;
+        }
+        return parse_ai_client_state_packet(data, packet);
     default:
         return false;
     }
@@ -1220,6 +1253,11 @@ static int rawhid_app_received_listener(const zmk_event_t *eh) {
     case RAWHID_APP_PACKET_CONFIG_REQUEST:
 #if IS_ENABLED(CONFIG_RAWHID_APP_CONFIG_RPC)
         handle_config_request(&packet);
+#endif
+        break;
+    case RAWHID_APP_PACKET_STATE_UPDATE:
+#if IS_ENABLED(CONFIG_RAWHID_APP_AI_CLIENT_STATE)
+        rawhid_app_ai_client_state_handle(&packet);
 #endif
         break;
     default:

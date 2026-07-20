@@ -31,6 +31,9 @@
 #define RAWHID_APP_MAGIC_0 'H'
 #define RAWHID_APP_MAGIC_1 'L'
 #define RAWHID_APP_VERSION 0x02
+#define RAWHID_APP_FEATURE_SYSTEM 0x00
+#define RAWHID_APP_FEATURE_AI_CLIENT 0x0A
+#define RAWHID_APP_CAP_AI_CLIENT_STATE (1u << 10)
 
 enum rawhid_app_packet_type {
     RAWHID_APP_PACKET_HOST_HELLO = 0x01,
@@ -48,6 +51,21 @@ enum rawhid_app_packet_type {
     RAWHID_APP_PACKET_KEY_PRESS = 0x80,
     RAWHID_APP_PACKET_CONFIG_REQUEST = 0x90,
     RAWHID_APP_PACKET_CONFIG_RESPONSE = 0x91,
+    RAWHID_APP_PACKET_STATE_UPDATE = 0xA0,
+};
+
+enum rawhid_app_ai_client_type {
+    RAWHID_APP_AI_CLIENT_CODEX = 0x01,
+};
+
+enum rawhid_app_ai_activity_state {
+    RAWHID_APP_AI_ACTIVITY_NONE = 0x00,
+    RAWHID_APP_AI_ACTIVITY_AVAILABLE = 0x01,
+    RAWHID_APP_AI_ACTIVITY_WORKING = 0x02,
+    RAWHID_APP_AI_ACTIVITY_WAITING_APPROVAL = 0x03,
+    RAWHID_APP_AI_ACTIVITY_WAITING_INPUT = 0x04,
+    RAWHID_APP_AI_ACTIVITY_COMPLETED = 0x05,
+    RAWHID_APP_AI_ACTIVITY_ERROR = 0x06,
 };
 
 enum rawhid_app_app_layer_action {
@@ -141,6 +159,13 @@ struct rawhid_app_packet {
             uint8_t error_code;
         } ai_usage;
         struct {
+            uint8_t client_type;
+            uint8_t client_variant;
+            uint8_t session_active;
+            uint8_t activity_state;
+            uint16_t revision;
+        } ai_client_state;
+        struct {
             uint8_t seq;
             uint8_t feature;
             uint8_t op;
@@ -155,3 +180,4 @@ struct rawhid_app_packet {
 void rawhid_app_layer_control_handle(const struct rawhid_app_packet *packet);
 void rawhid_app_time_sync_handle(const struct rawhid_app_packet *packet);
 void rawhid_app_ai_usage_handle(const struct rawhid_app_packet *packet);
+void rawhid_app_ai_client_state_handle(const struct rawhid_app_packet *packet);

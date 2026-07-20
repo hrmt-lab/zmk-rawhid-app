@@ -88,6 +88,8 @@ enables `RAWHID_APP` itself.
 | `RAWHID_APP_LAYER_CONTROL` | `n` | APP_LAYER (host-driven layer control) |
 | `RAWHID_APP_TIME_SYNC` | `n` | TIME_SYNC (time sync + getter) |
 | `RAWHID_APP_AI_USAGE` | `n` | AI_USAGE (usage state + getter) |
+| `RAWHID_APP_AI_CLIENT_STATE` | `n` | AI Client State Core (validation, arrival-order LWW, 15-second timeout) |
+| `RAWHID_APP_AI_CLIENT_STATE_RENDERER` | `n` | Statically declares that an AI state renderer is present |
 | `RAWHID_APP_LAYER_STATE_REPORT` | `n` | LAYER_STATE uplink (current layer and mask) |
 | `RAWHID_APP_BATTERY_REPORT` | `n` | BATTERY_STATUS uplink (Central/Self and peripheral levels) |
 | `RAWHID_APP_HOST_ACTION` | `n` | HOST_ACTION uplink (`&host_action <id> <value>`) |
@@ -450,6 +452,7 @@ Host Link packets are a **fixed 64 bytes**, little-endian.
 | `0x80` | KEY_PRESS | D→H |
 | `0x90` | CONFIG_REQUEST | H→D |
 | `0x91` | CONFIG_RESPONSE | D→H |
+| `0xA0` | STATE_UPDATE | H→D |
 
 `0x40`–`0x80` are device → host uplinks. To send them, set the corresponding capability
 bit in `DEVICE_HELLO` (the host discards types whose bit isn't set). `0x90` is the
@@ -463,6 +466,13 @@ Validation (`src/dispatch.c`): magic / version / known type / length==64 /
 HOST_HELLO has `payload_len=0`. It returns DEVICE_HELLO with the same header seq as the
 HOST_HELLO it answers. DEVICE_HELLO has `payload_len=12`, with `capabilities u32 LE` and
 `device_uid_hash u64 LE` in the payload.
+
+### AI Client State (`0xA0`)
+
+Uses `feature=0x0A`, `op=0`, `flags=0`, and `payload_len=6`. The payload contains
+`client_type`, `client_variant`, `session_active`, `activity_state`, and `revision u16 LE`.
+The last semantically valid packet wins regardless of revision ordering. The current state
+expires after 15 seconds without another valid update.
 
 ### APP_LAYER (`0x30`)
 
@@ -661,6 +671,7 @@ Auto-generated from the existing Kconfig.
 | 7 | LAYER_STATE | `RAWHID_APP_LAYER_STATE_REPORT` |
 | 8 | KEY_PRESS | `RAWHID_APP_KEY_PRESS` |
 | 9 | CONFIG_RPC | `RAWHID_APP_CONFIG_RPC` |
+| 10 | AI_CLIENT_STATE | both `RAWHID_APP_AI_CLIENT_STATE` and `RAWHID_APP_AI_CLIENT_STATE_RENDERER` |
 
 The host side can use this bit to skip sending packets to unsupported devices.
 
