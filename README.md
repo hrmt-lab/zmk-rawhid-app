@@ -84,6 +84,8 @@ CONFIG_RAWHID_APP_CONFIG_RPC=y
 | `RAWHID_APP_LAYER_CONTROL` | `n` | APP_LAYER（ホストからのレイヤー制御） |
 | `RAWHID_APP_TIME_SYNC` | `n` | TIME_SYNC（時刻同期＋getter） |
 | `RAWHID_APP_AI_USAGE` | `n` | AI_USAGE（使用率保持＋getter） |
+| `RAWHID_APP_AI_CLIENT_STATE` | `n` | AI Client State Core（検証・到着順LWW・15秒timeout） |
+| `RAWHID_APP_AI_CLIENT_STATE_RENDERER` | `n` | AI状態を利用するRendererが存在することを静的に宣言 |
 | `RAWHID_APP_LAYER_STATE_REPORT` | `n` | LAYER_STATE uplink（現在レイヤーと mask） |
 | `RAWHID_APP_BATTERY_REPORT` | `n` | BATTERY_STATUS uplink（Central/Self とペリフェラル残量） |
 | `RAWHID_APP_HOST_ACTION` | `n` | HOST_ACTION uplink（`&host_action <id> <value>`） |
@@ -422,6 +424,7 @@ Host Link packet は **64 byte 固定**。リトルエンディアン。
 | `0x80` | KEY_PRESS | D→H |
 | `0x90` | CONFIG_REQUEST | H→D |
 | `0x91` | CONFIG_RESPONSE | D→H |
+| `0xA0` | STATE_UPDATE | H→D |
 
 `0x40`〜`0x80` は device → host の uplink です。送信するには対応する capability bit を
 `DEVICE_HELLO` で立てます（host は bit が立っていない type を破棄します）。
@@ -434,6 +437,13 @@ header reserved と payload 未使用域が 0。
 
 HOST_HELLO は `payload_len=0`。HOST_HELLO に対し同じ header seq で DEVICE_HELLO を返す。
 DEVICE_HELLO は `payload_len=12`、payload に `capabilities u32 LE` と `device_uid_hash u64 LE` を持つ。
+
+### AI Client State (`0xA0`)
+
+`feature=0x0A`、`op=0`、`flags=0`、`payload_len=6`。Payloadは
+`client_type`、`client_variant`、`session_active`、`activity_state`、`revision u16 LE`。
+意味検証を通過した最後のPacketをrevisionの大小に関係なく受理し、15秒間正常な更新が
+なければ現在状態を無効化します。
 
 ### APP_LAYER (`0x30`)
 
@@ -623,6 +633,7 @@ FNV-1a 64bit でハッシュ化した値のみを送ります。hash 結果が 0
 | 7 | LAYER_STATE | `RAWHID_APP_LAYER_STATE_REPORT` |
 | 8 | KEY_PRESS | `RAWHID_APP_KEY_PRESS` |
 | 9 | CONFIG_RPC | `RAWHID_APP_CONFIG_RPC` |
+| 10 | AI_CLIENT_STATE | `RAWHID_APP_AI_CLIENT_STATE` と `RAWHID_APP_AI_CLIENT_STATE_RENDERER`の両方 |
 
 Host 側はこのビットを見て、未対応デバイスへのパケット送信をスキップできます。
 
