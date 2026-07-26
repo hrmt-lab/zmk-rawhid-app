@@ -61,6 +61,13 @@ config RAWHID_APP_BATTERY_REPORT
       peripheral slots. Level 0xff means unknown, not available, or
       disconnected.
 
+config RAWHID_APP_SPLIT_CENTRAL_STATUS_EVENT
+    bool
+    depends on RAWHID_APP_BATTERY_REPORT
+    depends on ZMK_SPLIT && ZMK_SPLIT_ROLE_CENTRAL
+    default y if SHIELD_PROSPECTOR_ADAPTER
+    default y if SHIELD_SUMIRE_DONGLE
+
 config RAWHID_APP_HOST_ACTION
     bool "Enable RawHID HOST_ACTION behavior uplink"
     depends on RAW_HID

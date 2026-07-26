@@ -16,7 +16,7 @@
 #define BATTERY_PERIPHERAL_SOURCE_COUNT 0
 #endif
 
-#if __has_include(<zmk/events/split_central_status_changed.h>)
+#if IS_ENABLED(CONFIG_RAWHID_APP_SPLIT_CENTRAL_STATUS_EVENT)
 #define RAWHID_APP_HAS_SPLIT_CENTRAL_STATUS 1
 #include <zmk/events/split_central_status_changed.h>
 #else
