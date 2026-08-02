@@ -469,8 +469,22 @@ HOST_HELLO it answers. DEVICE_HELLO has `payload_len=12`, with `capabilities u32
 
 ### AI Client State (`0xA0`)
 
-Uses `feature=0x0A`, `op=0`, `flags=0`, and `payload_len=6`. The payload contains
+Uses `feature=0x0A`, `op=0`, and `flags=0`. The first six payload bytes contain
 `client_type`, `client_variant`, `session_active`, `activity_state`, and `revision u16 LE`.
+The legacy format for bit 10-only devices uses `payload_len=6` and defaults `work_phase`
+to UNSPECIFIED. Devices advertising bit 11 `AI_CLIENT_WORK_PHASE` accept `payload_len=7`,
+with `work_phase` at offset 6.
+
+| work_phase | value | meaning |
+|---|---:|---|
+| UNSPECIFIED | `0x00` | Detail unavailable; falls back to the legacy WORKING display |
+| THINKING | `0x01` | Reasoning or response generation |
+| EXECUTING | `0x02` | Command or tool execution |
+| SEARCHING | `0x03` | Web search |
+
+Only UNSPECIFIED is valid outside WORKING. Unknown values are normalized to UNSPECIFIED
+without dropping the base state and produce a diagnostic log. A work-phase-only change
+with the same revision publishes a new state event, while an identical heartbeat does not.
 The last semantically valid packet wins regardless of revision ordering. The current state
 expires after 15 seconds without another valid update.
 
@@ -672,6 +686,7 @@ Auto-generated from the existing Kconfig.
 | 8 | KEY_PRESS | `RAWHID_APP_KEY_PRESS` |
 | 9 | CONFIG_RPC | `RAWHID_APP_CONFIG_RPC` |
 | 10 | AI_CLIENT_STATE | both `RAWHID_APP_AI_CLIENT_STATE` and `RAWHID_APP_AI_CLIENT_STATE_RENDERER` |
+| 11 | AI_CLIENT_WORK_PHASE | same condition as bit 10; always advertised together with bit 10 |
 
 The host side can use this bit to skip sending packets to unsupported devices.
 

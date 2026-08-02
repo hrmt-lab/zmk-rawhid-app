@@ -19,5 +19,6 @@ uint64_t rawhid_app_identity_get_uid_hash(void);
  *   bit 8 — CONFIG_RAWHID_APP_KEY_PRESS
  *   bit 9 — CONFIG_RAWHID_APP_CONFIG_RPC
  *   bit 10 — CONFIG_RAWHID_APP_AI_CLIENT_STATE and
- *            CONFIG_RAWHID_APP_AI_CLIENT_STATE_RENDERER */
+ *            CONFIG_RAWHID_APP_AI_CLIENT_STATE_RENDERER
+ *   bit 11 — AI client work phase; always advertised with bit 10 */
 uint32_t rawhid_app_identity_get_capabilities(void);

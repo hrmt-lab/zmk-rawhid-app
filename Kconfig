@@ -48,8 +48,8 @@ config RAWHID_APP_AI_CLIENT_STATE_RENDERER
     help
       Enable this only when the target includes at least one display, LED,
       vibration, sound, or another renderer that consumes AI client state.
-      CAP_AI_CLIENT_STATE is advertised only when both this option and the
-      AI client state core are enabled.
+      CAP_AI_CLIENT_STATE and CAP_AI_CLIENT_WORK_PHASE are advertised only
+      when both this option and the AI client state core are enabled.
 
 config RAWHID_APP_BATTERY_REPORT
     bool "Enable RawHID BATTERY_STATUS uplink"

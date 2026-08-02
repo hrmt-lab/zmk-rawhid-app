@@ -7,14 +7,27 @@
 static bool state_is_valid(const struct rawhid_app_ai_client_state *state) {
     return state->client_type == RAWHID_APP_AI_CLIENT_CODEX &&
            state->activity_state <= RAWHID_APP_AI_ACTIVITY_ERROR &&
+           state->work_phase <= RAWHID_APP_AI_WORK_PHASE_SEARCHING &&
            ((!state->session_active &&
-             state->activity_state == RAWHID_APP_AI_ACTIVITY_NONE) ||
+             state->activity_state == RAWHID_APP_AI_ACTIVITY_NONE &&
+             state->work_phase == RAWHID_APP_AI_WORK_PHASE_UNSPECIFIED) ||
             (state->session_active &&
-             state->activity_state != RAWHID_APP_AI_ACTIVITY_NONE));
+             state->activity_state != RAWHID_APP_AI_ACTIVITY_NONE &&
+             (state->activity_state == RAWHID_APP_AI_ACTIVITY_WORKING ||
+              state->work_phase == RAWHID_APP_AI_WORK_PHASE_UNSPECIFIED)));
 }
 
 static bool state_equals(const struct rawhid_app_ai_client_state *left,
                          const struct rawhid_app_ai_client_state *right) {
+    return left->client_type == right->client_type &&
+           left->client_variant == right->client_variant &&
+           left->session_active == right->session_active &&
+           left->activity_state == right->activity_state && left->revision == right->revision &&
+           left->work_phase == right->work_phase;
+}
+
+static bool base_state_equals(const struct rawhid_app_ai_client_state *left,
+                              const struct rawhid_app_ai_client_state *right) {
     return left->client_type == right->client_type &&
            left->client_variant == right->client_variant &&
            left->session_active == right->session_active &&
@@ -32,9 +45,13 @@ enum rawhid_app_ai_client_apply_result rawhid_app_ai_client_state_model_apply(
     }
 
     const bool same_revision = model->valid && model->state.revision == next->revision;
+    const bool work_phase_only = same_revision && base_state_equals(&model->state, next);
     model->state = *next;
     model->valid = true;
     model->generation++;
+    if (work_phase_only) {
+        return RAWHID_APP_AI_CLIENT_UPDATED_WORK_PHASE;
+    }
     return same_revision ? RAWHID_APP_AI_CLIENT_UPDATED_SAME_REVISION
                          : RAWHID_APP_AI_CLIENT_UPDATED;
 }

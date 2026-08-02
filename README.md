@@ -440,8 +440,22 @@ DEVICE_HELLO は `payload_len=12`、payload に `capabilities u32 LE` と `devic
 
 ### AI Client State (`0xA0`)
 
-`feature=0x0A`、`op=0`、`flags=0`、`payload_len=6`。Payloadは
+`feature=0x0A`、`op=0`、`flags=0`。Payload先頭6 byteは
 `client_type`、`client_variant`、`session_active`、`activity_state`、`revision u16 LE`。
+bit 10のみのlegacy形式は`payload_len=6`で、`work_phase=UNSPECIFIED`として扱います。
+bit 11 `AI_CLIENT_WORK_PHASE`対応形式は`payload_len=7`で、offset 6へ
+`work_phase`を追加します。
+
+| work_phase | 値 | 意味 |
+|---|---:|---|
+| UNSPECIFIED | `0x00` | 詳細不明。従来のWORKING表示へfallback |
+| THINKING | `0x01` | 推論・応答生成中 |
+| EXECUTING | `0x02` | command／tool実行中 |
+| SEARCHING | `0x03` | Web検索中 |
+
+WORKING以外ではUNSPECIFIEDだけを受理します。未知値はbase stateを維持したまま
+UNSPECIFIEDへ正規化して診断logを残します。同じrevisionでもwork phaseだけが変われば
+新しい状態eventとして受理し、全fieldが同じheartbeatではeventを発行しません。
 意味検証を通過した最後のPacketをrevisionの大小に関係なく受理し、15秒間正常な更新が
 なければ現在状態を無効化します。
 
@@ -634,6 +648,7 @@ FNV-1a 64bit でハッシュ化した値のみを送ります。hash 結果が 0
 | 8 | KEY_PRESS | `RAWHID_APP_KEY_PRESS` |
 | 9 | CONFIG_RPC | `RAWHID_APP_CONFIG_RPC` |
 | 10 | AI_CLIENT_STATE | `RAWHID_APP_AI_CLIENT_STATE` と `RAWHID_APP_AI_CLIENT_STATE_RENDERER`の両方 |
+| 11 | AI_CLIENT_WORK_PHASE | bit 10と同条件。必ずbit 10と同時に広告 |
 
 Host 側はこのビットを見て、未対応デバイスへのパケット送信をスキップできます。
 

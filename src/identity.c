@@ -168,7 +168,7 @@ uint32_t rawhid_app_identity_get_capabilities(void) {
     }
     if (IS_ENABLED(CONFIG_RAWHID_APP_AI_CLIENT_STATE) &&
         IS_ENABLED(CONFIG_RAWHID_APP_AI_CLIENT_STATE_RENDERER)) {
-        caps |= RAWHID_APP_CAP_AI_CLIENT_STATE;
+        caps |= RAWHID_APP_CAP_AI_CLIENT_STATE | RAWHID_APP_CAP_AI_CLIENT_WORK_PHASE;
     }
 
     return caps;

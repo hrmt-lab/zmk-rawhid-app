@@ -12,6 +12,7 @@
 #include <zmk/sensors.h>
 
 #include <zephyr/kernel.h>
+#include <zephyr/logging/log.h>
 #include <zephyr/sys/atomic.h>
 #include <zephyr/sys/byteorder.h>
 #include <zephyr/sys/util.h>
@@ -24,16 +25,16 @@
 #include <rawhid_app/identity.h>
 #include <rawhid_app/uplink.h>
 
+#include "ai_client_state_packet.h"
+
+LOG_MODULE_DECLARE(zmk, CONFIG_ZMK_LOG_LEVEL);
+
 /* DEVICE_HELLO payload offsets. */
 #define RAWHID_APP_HELLO_PAYLOAD_LEN 12
 #define RAWHID_APP_HELLO_CAPABILITIES 0   /* u32 LE */
 #define RAWHID_APP_HELLO_DEVICE_UID_HASH 4 /* u64 LE */
-#define RAWHID_APP_AI_CLIENT_STATE_PAYLOAD_LEN 6
-#define RAWHID_APP_AI_CLIENT_STATE_CLIENT_TYPE 0
-#define RAWHID_APP_AI_CLIENT_STATE_CLIENT_VARIANT 1
-#define RAWHID_APP_AI_CLIENT_STATE_SESSION_ACTIVE 2
-#define RAWHID_APP_AI_CLIENT_STATE_ACTIVITY_STATE 3
-#define RAWHID_APP_AI_CLIENT_STATE_REVISION 4
+#define RAWHID_APP_AI_CLIENT_STATE_LEGACY_PAYLOAD_LEN 6
+#define RAWHID_APP_AI_CLIENT_STATE_WORK_PHASE_PAYLOAD_LEN 7
 
 /* APP_LAYER payload offsets. */
 #define RAWHID_APP_APP_LAYER_PAYLOAD_LEN 2
@@ -279,19 +280,25 @@ static bool parse_config_request_packet(const uint8_t *data, struct rawhid_app_p
     return true;
 }
 
-static bool parse_ai_client_state_packet(const uint8_t *data,
-                                         struct rawhid_app_packet *packet) {
+static bool parse_ai_client_state_packet(const uint8_t *data, struct rawhid_app_packet *packet,
+                                         uint8_t payload_len) {
     const uint8_t *payload = &data[RAWHID_APP_OFFSET_PAYLOAD];
-    packet->ai_client_state.client_type =
-        payload[RAWHID_APP_AI_CLIENT_STATE_CLIENT_TYPE];
-    packet->ai_client_state.client_variant =
-        payload[RAWHID_APP_AI_CLIENT_STATE_CLIENT_VARIANT];
-    packet->ai_client_state.session_active =
-        payload[RAWHID_APP_AI_CLIENT_STATE_SESSION_ACTIVE];
-    packet->ai_client_state.activity_state =
-        payload[RAWHID_APP_AI_CLIENT_STATE_ACTIVITY_STATE];
-    packet->ai_client_state.revision =
-        sys_get_le16(&payload[RAWHID_APP_AI_CLIENT_STATE_REVISION]);
+    struct rawhid_app_ai_client_state state = {0};
+    const enum rawhid_app_ai_client_decode_result result =
+        rawhid_app_ai_client_state_decode(payload, payload_len, &state);
+    if (result == RAWHID_APP_AI_CLIENT_DECODE_INVALID) {
+        return false;
+    }
+    if (result == RAWHID_APP_AI_CLIENT_DECODE_NORMALIZED_WORK_PHASE) {
+        LOG_WRN("normalizing unknown AI client work phase 0x%02x", payload[6]);
+    }
+
+    packet->ai_client_state.client_type = state.client_type;
+    packet->ai_client_state.client_variant = state.client_variant;
+    packet->ai_client_state.session_active = state.session_active;
+    packet->ai_client_state.activity_state = state.activity_state;
+    packet->ai_client_state.revision = state.revision;
+    packet->ai_client_state.work_phase = state.work_phase;
     return true;
 }
 
@@ -437,10 +444,11 @@ static bool parse_packet(const struct raw_hid_received_event *event,
         if (data[RAWHID_APP_OFFSET_FEATURE] != RAWHID_APP_FEATURE_AI_CLIENT ||
             data[RAWHID_APP_OFFSET_OP] != 0 ||
             data[RAWHID_APP_OFFSET_STATUS_OR_FLAGS] != 0 ||
-            payload_len != RAWHID_APP_AI_CLIENT_STATE_PAYLOAD_LEN) {
+            (payload_len != RAWHID_APP_AI_CLIENT_STATE_LEGACY_PAYLOAD_LEN &&
+             payload_len != RAWHID_APP_AI_CLIENT_STATE_WORK_PHASE_PAYLOAD_LEN)) {
             return false;
         }
-        return parse_ai_client_state_packet(data, packet);
+        return parse_ai_client_state_packet(data, packet, payload_len);
     default:
         return false;
     }

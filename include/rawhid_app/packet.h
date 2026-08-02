@@ -34,6 +34,7 @@
 #define RAWHID_APP_FEATURE_SYSTEM 0x00
 #define RAWHID_APP_FEATURE_AI_CLIENT 0x0A
 #define RAWHID_APP_CAP_AI_CLIENT_STATE (1u << 10)
+#define RAWHID_APP_CAP_AI_CLIENT_WORK_PHASE (1u << 11)
 
 enum rawhid_app_packet_type {
     RAWHID_APP_PACKET_HOST_HELLO = 0x01,
@@ -66,6 +67,13 @@ enum rawhid_app_ai_activity_state {
     RAWHID_APP_AI_ACTIVITY_WAITING_INPUT = 0x04,
     RAWHID_APP_AI_ACTIVITY_COMPLETED = 0x05,
     RAWHID_APP_AI_ACTIVITY_ERROR = 0x06,
+};
+
+enum rawhid_app_ai_work_phase {
+    RAWHID_APP_AI_WORK_PHASE_UNSPECIFIED = 0x00,
+    RAWHID_APP_AI_WORK_PHASE_THINKING = 0x01,
+    RAWHID_APP_AI_WORK_PHASE_EXECUTING = 0x02,
+    RAWHID_APP_AI_WORK_PHASE_SEARCHING = 0x03,
 };
 
 enum rawhid_app_app_layer_action {
@@ -164,6 +172,7 @@ struct rawhid_app_packet {
             uint8_t session_active;
             uint8_t activity_state;
             uint16_t revision;
+            uint8_t work_phase;
         } ai_client_state;
         struct {
             uint8_t seq;

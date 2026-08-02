@@ -75,6 +75,7 @@ void rawhid_app_ai_client_state_handle(const struct rawhid_app_packet *packet) {
     const uint8_t client_variant = packet->ai_client_state.client_variant;
     const uint8_t session_active = packet->ai_client_state.session_active;
     const uint8_t activity_state = packet->ai_client_state.activity_state;
+    const uint8_t work_phase = packet->ai_client_state.work_phase;
 
     if (session_active > 1) {
         LOG_WRN("dropping invalid AI client state");
@@ -91,6 +92,7 @@ void rawhid_app_ai_client_state_handle(const struct rawhid_app_packet *packet) {
         .session_active = session_active != 0,
         .activity_state = activity_state,
         .revision = packet->ai_client_state.revision,
+        .work_phase = work_phase,
     };
 
     uint32_t generation = 0;
@@ -108,11 +110,13 @@ void rawhid_app_ai_client_state_handle(const struct rawhid_app_packet *packet) {
         LOG_WRN("AI client payload changed without revision change");
     }
     if (result == RAWHID_APP_AI_CLIENT_UPDATED ||
+        result == RAWHID_APP_AI_CLIENT_UPDATED_WORK_PHASE ||
         result == RAWHID_APP_AI_CLIENT_UPDATED_SAME_REVISION) {
         generation = state_model.generation;
         state_changed = true;
-        LOG_INF("AI client state accepted: active=%u activity=%u revision=%u generation=%u",
-                next.session_active, next.activity_state, next.revision, state_model.generation);
+        LOG_INF("AI client state accepted: active=%u activity=%u phase=%u revision=%u generation=%u",
+                next.session_active, next.activity_state, next.work_phase, next.revision,
+                state_model.generation);
     } else {
         LOG_DBG("AI client state heartbeat: revision=%u", next.revision);
     }

@@ -9,6 +9,7 @@ struct rawhid_app_ai_client_state {
     bool session_active;
     uint8_t activity_state;
     uint16_t revision;
+    uint8_t work_phase;
 };
 
 /* Copies the current valid state. Returns false before the first valid update
