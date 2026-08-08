@@ -1,21 +1,35 @@
 #include <assert.h>
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 
 #include <rawhid_app/packet.h>
 
 #include "ai_client_state_model.h"
 
-static struct rawhid_app_ai_client_state codex_state(uint8_t activity, bool session_active,
-                                                      uint16_t revision, uint8_t work_phase) {
+static struct rawhid_app_ai_client_state client_state(uint8_t client_type, uint8_t activity,
+                                                      bool session_active, uint16_t revision,
+                                                      uint8_t work_phase) {
     return (struct rawhid_app_ai_client_state){
-        .client_type = RAWHID_APP_AI_CLIENT_CODEX,
+        .client_type = client_type,
         .client_variant = 0x01,
         .session_active = session_active,
         .activity_state = activity,
         .revision = revision,
         .work_phase = work_phase,
     };
+}
+
+static struct rawhid_app_ai_client_state codex_state(uint8_t activity, bool session_active,
+                                                      uint16_t revision, uint8_t work_phase) {
+    return client_state(RAWHID_APP_AI_CLIENT_CODEX, activity, session_active, revision,
+                        work_phase);
+}
+
+static struct rawhid_app_ai_client_state claude_state(uint8_t activity, bool session_active,
+                                                       uint16_t revision, uint8_t work_phase) {
+    return client_state(RAWHID_APP_AI_CLIENT_CLAUDE_CODE, activity, session_active, revision,
+                        work_phase);
 }
 
 static void assert_state(const struct rawhid_app_ai_client_state_model *model, bool valid,
@@ -154,6 +168,68 @@ static void test_rejects_work_phase_outside_working(void) {
                  RAWHID_APP_AI_WORK_PHASE_UNSPECIFIED);
 }
 
+static void test_claude_code_client_type_follows_the_codex_lifecycle(void) {
+    struct rawhid_app_ai_client_state_model model = {0};
+    const struct rawhid_app_ai_client_state thinking =
+        claude_state(RAWHID_APP_AI_ACTIVITY_WORKING, true, 11,
+                     RAWHID_APP_AI_WORK_PHASE_THINKING);
+    const struct rawhid_app_ai_client_state executing =
+        claude_state(RAWHID_APP_AI_ACTIVITY_WORKING, true, 11,
+                     RAWHID_APP_AI_WORK_PHASE_EXECUTING);
+    const struct rawhid_app_ai_client_state invalid_phase =
+        claude_state(RAWHID_APP_AI_ACTIVITY_WAITING_APPROVAL, true, 12,
+                     RAWHID_APP_AI_WORK_PHASE_THINKING);
+
+    assert(rawhid_app_ai_client_state_model_apply(&model, &thinking) ==
+           RAWHID_APP_AI_CLIENT_UPDATED);
+    assert(model.state.client_type == RAWHID_APP_AI_CLIENT_CLAUDE_CODE);
+    assert(rawhid_app_ai_client_state_model_apply(&model, &thinking) ==
+           RAWHID_APP_AI_CLIENT_HEARTBEAT);
+    assert(rawhid_app_ai_client_state_model_apply(&model, &executing) ==
+           RAWHID_APP_AI_CLIENT_UPDATED_WORK_PHASE);
+    assert(model.generation == 2);
+    assert(rawhid_app_ai_client_state_model_apply(&model, &invalid_phase) ==
+           RAWHID_APP_AI_CLIENT_REJECTED);
+    assert(model.generation == 2);
+
+    assert(rawhid_app_ai_client_state_model_timeout(&model));
+    assert(!model.valid);
+    assert(model.state.client_type == 0);
+}
+
+static void test_client_type_change_is_a_full_update(void) {
+    struct rawhid_app_ai_client_state_model model = {0};
+    const struct rawhid_app_ai_client_state codex =
+        codex_state(RAWHID_APP_AI_ACTIVITY_AVAILABLE, true, 5,
+                    RAWHID_APP_AI_WORK_PHASE_UNSPECIFIED);
+    const struct rawhid_app_ai_client_state claude =
+        claude_state(RAWHID_APP_AI_ACTIVITY_AVAILABLE, true, 5,
+                     RAWHID_APP_AI_WORK_PHASE_UNSPECIFIED);
+
+    assert(rawhid_app_ai_client_state_model_apply(&model, &codex) ==
+           RAWHID_APP_AI_CLIENT_UPDATED);
+    assert(rawhid_app_ai_client_state_model_apply(&model, &claude) ==
+           RAWHID_APP_AI_CLIENT_UPDATED_SAME_REVISION);
+    assert(model.state.client_type == RAWHID_APP_AI_CLIENT_CLAUDE_CODE);
+    assert(model.generation == 2);
+}
+
+static void test_rejects_unknown_client_types(void) {
+    const uint8_t unknown_types[] = {0x00, 0x03, 0xff};
+
+    for (size_t index = 0; index < sizeof(unknown_types); index++) {
+        struct rawhid_app_ai_client_state_model model = {0};
+        const struct rawhid_app_ai_client_state unknown =
+            client_state(unknown_types[index], RAWHID_APP_AI_ACTIVITY_AVAILABLE, true, 1,
+                         RAWHID_APP_AI_WORK_PHASE_UNSPECIFIED);
+
+        assert(rawhid_app_ai_client_state_model_apply(&model, &unknown) ==
+               RAWHID_APP_AI_CLIENT_REJECTED);
+        assert_state(&model, false, 0, RAWHID_APP_AI_ACTIVITY_NONE, 0,
+                     RAWHID_APP_AI_WORK_PHASE_UNSPECIFIED);
+    }
+}
+
 int main(void) {
     test_rejects_invalid_state_without_mutating_model();
     test_heartbeat_keeps_generation();
@@ -162,5 +238,8 @@ int main(void) {
     test_timeout_clears_state_and_advances_generation();
     test_same_revision_work_phase_change_is_an_update();
     test_rejects_work_phase_outside_working();
+    test_claude_code_client_type_follows_the_codex_lifecycle();
+    test_client_type_change_is_a_full_update();
+    test_rejects_unknown_client_types();
     return 0;
 }

@@ -4,6 +4,7 @@
 
 #include <rawhid_app/packet.h>
 
+#include "ai_client_contract.h"
 #include "ai_client_state_packet.h"
 
 #define AI_CLIENT_STATE_LEGACY_PAYLOAD_LEN 6
@@ -27,7 +28,7 @@ enum rawhid_app_ai_client_decode_result rawhid_app_ai_client_state_decode(
                             ? payload[6]
                             : RAWHID_APP_AI_WORK_PHASE_UNSPECIFIED;
 
-    if (payload[2] > 1 || state->client_type != RAWHID_APP_AI_CLIENT_CODEX ||
+    if (payload[2] > 1 || !rawhid_app_ai_client_type_is_known(state->client_type) ||
         state->activity_state > RAWHID_APP_AI_ACTIVITY_ERROR ||
         (!state->session_active && state->activity_state != RAWHID_APP_AI_ACTIVITY_NONE) ||
         (state->session_active && state->activity_state == RAWHID_APP_AI_ACTIVITY_NONE)) {

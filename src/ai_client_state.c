@@ -83,7 +83,8 @@ void rawhid_app_ai_client_state_handle(const struct rawhid_app_packet *packet) {
     }
 
     if (client_variant < 0x01 || client_variant > 0x03) {
-        LOG_WRN("accepting unknown Codex client variant 0x%02x", client_variant);
+        LOG_WRN("accepting unknown client variant 0x%02x for client type 0x%02x", client_variant,
+                client_type);
     }
 
     const struct rawhid_app_ai_client_state next = {

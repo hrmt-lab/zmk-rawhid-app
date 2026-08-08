@@ -51,6 +51,17 @@ config RAWHID_APP_AI_CLIENT_STATE_RENDERER
       CAP_AI_CLIENT_STATE and CAP_AI_CLIENT_WORK_PHASE are advertised only
       when both this option and the AI client state core are enabled.
 
+config RAWHID_APP_AI_CLIENT_CLAUDE_CODE_RENDERER
+    bool "Declare a Claude Code capable AI client state renderer"
+    depends on RAWHID_APP_AI_CLIENT_STATE_RENDERER
+    help
+      Enable this only when the target's renderer can represent Claude Code as
+      a distinct AI client, for example with its own logo on a display or with
+      a defined LED / vibration / sound expression. The AI client state core
+      always accepts client_type CLAUDE_CODE; this option only controls the
+      CAP_AI_CLIENT_CLAUDE_CODE (bit 12) advertisement, which is never sent
+      without CAP_AI_CLIENT_STATE.
+
 config RAWHID_APP_BATTERY_REPORT
     bool "Enable RawHID BATTERY_STATUS uplink"
     depends on RAW_HID

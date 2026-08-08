@@ -20,6 +20,8 @@ LOG_MODULE_DECLARE(zmk, CONFIG_ZMK_LOG_LEVEL);
 #include <rawhid_app/identity.h>
 #include <rawhid_app/packet.h>
 
+#include "ai_client_contract.h"
+
 /* FNV-1a 64-bit constants. */
 #define FNV1A_64_OFFSET_BASIS UINT64_C(14695981039346656037)
 #define FNV1A_64_PRIME        UINT64_C(1099511628211)
@@ -166,10 +168,10 @@ uint32_t rawhid_app_identity_get_capabilities(void) {
     if (IS_ENABLED(CONFIG_RAWHID_APP_CONFIG_RPC)) {
         caps |= BIT(9);
     }
-    if (IS_ENABLED(CONFIG_RAWHID_APP_AI_CLIENT_STATE) &&
-        IS_ENABLED(CONFIG_RAWHID_APP_AI_CLIENT_STATE_RENDERER)) {
-        caps |= RAWHID_APP_CAP_AI_CLIENT_STATE | RAWHID_APP_CAP_AI_CLIENT_WORK_PHASE;
-    }
+    caps |= rawhid_app_ai_client_capability_bits(
+        IS_ENABLED(CONFIG_RAWHID_APP_AI_CLIENT_STATE),
+        IS_ENABLED(CONFIG_RAWHID_APP_AI_CLIENT_STATE_RENDERER),
+        IS_ENABLED(CONFIG_RAWHID_APP_AI_CLIENT_CLAUDE_CODE_RENDERER));
 
     return caps;
 }

@@ -9,6 +9,7 @@ ZMK event発行を、Zephyr実機ビルドより短いフィードバックで�
 リポジトリのルートで次を実行する。
 
 ```sh
+tools/test-ai-client-contract.sh
 tools/test-ai-client-state-core.sh
 tools/test-ai-client-state-model.sh
 tools/test-ai-client-state-packet.sh
@@ -19,6 +20,9 @@ tools/test-ai-client-state-packet.sh
 
 ## 対象範囲
 
+- `test-ai-client-contract.sh`: `src/ai_client_contract.h`の純粋関数を検証する。
+  既知client type（`CODEX` / `CLAUDE_CODE`）の判定と、Core／Renderer／Claude Code Renderer宣言の
+  組み合わせごとのcapability bit 10／11／12を検証する。bit 12単独広告が起きないことも含む。
 - `test-ai-client-state-core.sh`: state更新、ZMK event、15秒timeoutを検証する。
   同revisionのphase-only変更ではeventを1件発行し、同一heartbeatではeventを増やさない。
   Zephyr依存は`tests/host_shim/`で最小限に置き換える。
@@ -28,5 +32,5 @@ tools/test-ai-client-state-packet.sh
   未知phaseのUNSPECIFIED正規化、base state保持、長さと組み合わせ不正のrejectを検証する。
 
 AI Client Stateのwire／state契約は
-[`ai-client-work-phase.md`](ai-client-work-phase.md)を参照する。変更時は3スクリプトを
+[`ai-client-work-phase.md`](ai-client-work-phase.md)を参照する。変更時は4スクリプトを
 すべて実行し、`git diff --check`と対象Firmwareのfresh buildも行う。

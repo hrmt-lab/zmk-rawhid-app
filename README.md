@@ -86,6 +86,7 @@ CONFIG_RAWHID_APP_CONFIG_RPC=y
 | `RAWHID_APP_AI_USAGE` | `n` | AI_USAGE（使用率保持＋getter） |
 | `RAWHID_APP_AI_CLIENT_STATE` | `n` | AI Client State Core（検証・到着順LWW・15秒timeout） |
 | `RAWHID_APP_AI_CLIENT_STATE_RENDERER` | `n` | AI状態を利用するRendererが存在することを静的に宣言 |
+| `RAWHID_APP_AI_CLIENT_CLAUDE_CODE_RENDERER` | `n` | RendererがClaude Codeを独立clientとして表現できることを静的に宣言（bit 12） |
 | `RAWHID_APP_LAYER_STATE_REPORT` | `n` | LAYER_STATE uplink（現在レイヤーと mask） |
 | `RAWHID_APP_BATTERY_REPORT` | `n` | BATTERY_STATUS uplink（Central/Self とペリフェラル残量） |
 | `RAWHID_APP_HOST_ACTION` | `n` | HOST_ACTION uplink（`&host_action <id> <value>`） |
@@ -446,6 +447,15 @@ bit 10のみのlegacy形式は`payload_len=6`で、`work_phase=UNSPECIFIED`と�
 bit 11 `AI_CLIENT_WORK_PHASE`対応形式は`payload_len=7`で、offset 6へ
 `work_phase`を追加します。
 
+| client_type | 値 | 意味 |
+|---|---:|---|
+| CODEX | `0x01` | Codex |
+| CLAUDE_CODE | `0x02` | Claude Code |
+
+上記以外の`client_type`はPacket全体をrejectします。Coreは広告したcapabilityに関係なく
+既知の全client typeを受理します。bit 12 `AI_CLIENT_CLAUDE_CODE`は
+「Rendererがそのclientを表現できる」ことの広告であり、decoderのgateではありません。
+
 | work_phase | 値 | 意味 |
 |---|---:|---|
 | UNSPECIFIED | `0x00` | 詳細不明。従来のWORKING表示へfallback |
@@ -649,6 +659,7 @@ FNV-1a 64bit でハッシュ化した値のみを送ります。hash 結果が 0
 | 9 | CONFIG_RPC | `RAWHID_APP_CONFIG_RPC` |
 | 10 | AI_CLIENT_STATE | `RAWHID_APP_AI_CLIENT_STATE` と `RAWHID_APP_AI_CLIENT_STATE_RENDERER`の両方 |
 | 11 | AI_CLIENT_WORK_PHASE | bit 10と同条件。必ずbit 10と同時に広告 |
+| 12 | AI_CLIENT_CLAUDE_CODE | bit 10の条件に加えて `RAWHID_APP_AI_CLIENT_CLAUDE_CODE_RENDERER`。単独では広告しない |
 
 Host 側はこのビットを見て、未対応デバイスへのパケット送信をスキップできます。
 

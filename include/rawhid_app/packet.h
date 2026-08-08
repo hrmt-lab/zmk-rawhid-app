@@ -35,6 +35,7 @@
 #define RAWHID_APP_FEATURE_AI_CLIENT 0x0A
 #define RAWHID_APP_CAP_AI_CLIENT_STATE (1u << 10)
 #define RAWHID_APP_CAP_AI_CLIENT_WORK_PHASE (1u << 11)
+#define RAWHID_APP_CAP_AI_CLIENT_CLAUDE_CODE (1u << 12)
 
 enum rawhid_app_packet_type {
     RAWHID_APP_PACKET_HOST_HELLO = 0x01,
@@ -57,6 +58,7 @@ enum rawhid_app_packet_type {
 
 enum rawhid_app_ai_client_type {
     RAWHID_APP_AI_CLIENT_CODEX = 0x01,
+    RAWHID_APP_AI_CLIENT_CLAUDE_CODE = 0x02,
 };
 
 enum rawhid_app_ai_activity_state {

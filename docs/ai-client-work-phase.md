@@ -10,6 +10,9 @@ Host Link v2の`AI_CLIENT / STATE_UPDATE (0xA0)`で、既存の上位`activity_s
 - bit 10 `CAP_AI_CLIENT_STATE`: AI Client Stateを受信できる。
 - bit 11 `CAP_AI_CLIENT_WORK_PHASE`: 末尾`work_phase`を受信できる。
 - bit 11はAI Client State CoreとRenderer宣言がともに有効な場合だけ、bit 10と同時に広告する。
+- bit 12 `CAP_AI_CLIENT_CLAUDE_CODE`: `client_type = CLAUDE_CODE`をRendererが表現できる。
+  `RAWHID_APP_AI_CLIENT_CLAUDE_CODE_RENDERER`が有効なときだけ、bit 10と同時に広告する。
+  単独では広告しない。
 - Host Link version、packet type `0xA0`、feature `0x0A`、op／flags `0x00`は変更しない。
 
 | offset | size | field | bit 10のみ | bit 11対応 |
@@ -23,6 +26,18 @@ Host Link v2の`AI_CLIENT / STATE_UPDATE (0xA0)`で、既存の上位`activity_s
 
 - bit 10のみは`payload_len=6`で、decode時に`UNSPECIFIED`を補完する。
 - bit 11対応は`payload_len=7`とする。同じdeviceへ6 byteと7 byteを二重送信しない。
+
+## Client type
+
+| 値 | 名称 | 意味 |
+|---:|---|---|
+| `0x01` | `CODEX` | Codex |
+| `0x02` | `CLAUDE_CODE` | Claude Code |
+
+上記以外の`client_type`はpacket全体をrejectする。Coreは広告したcapabilityに関係なく
+既知の全client typeを受理する。capabilityは「decoderが値を通すか」ではなく
+「そのTargetのRendererがそのclientを表現できるか」を表す。したがってClaude Codeを表現できない
+Targetでも、Coreは`CLAUDE_CODE`のstateを保持しeventを発行する。
 
 ## Work phase
 
@@ -40,7 +55,8 @@ Host Link v2の`AI_CLIENT / STATE_UPDATE (0xA0)`で、既存の上位`activity_s
 
 ## State、revision、event
 
-- state equalityには`work_phase`を含める。
+- state equalityには`client_type`と`work_phase`を含める。同revisionでもclient typeが変われば
+  新しいstateとして受理する。
 - 同revisionでwork phaseだけが変わったpacketは新しいstateとして受理し、generationを進めて
   ZMK eventを発行する。base stateの同revision変更とは別結果として扱い、revision警告を出さない。
 - client、session、activity、revision、work phaseがすべて同じpacketはheartbeatとして扱い、

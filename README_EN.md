@@ -90,6 +90,7 @@ enables `RAWHID_APP` itself.
 | `RAWHID_APP_AI_USAGE` | `n` | AI_USAGE (usage state + getter) |
 | `RAWHID_APP_AI_CLIENT_STATE` | `n` | AI Client State Core (validation, arrival-order LWW, 15-second timeout) |
 | `RAWHID_APP_AI_CLIENT_STATE_RENDERER` | `n` | Statically declares that an AI state renderer is present |
+| `RAWHID_APP_AI_CLIENT_CLAUDE_CODE_RENDERER` | `n` | Statically declares that the renderer can represent Claude Code as a distinct client (bit 12) |
 | `RAWHID_APP_LAYER_STATE_REPORT` | `n` | LAYER_STATE uplink (current layer and mask) |
 | `RAWHID_APP_BATTERY_REPORT` | `n` | BATTERY_STATUS uplink (Central/Self and peripheral levels) |
 | `RAWHID_APP_HOST_ACTION` | `n` | HOST_ACTION uplink (`&host_action <id> <value>`) |
@@ -475,6 +476,15 @@ The legacy format for bit 10-only devices uses `payload_len=6` and defaults `wor
 to UNSPECIFIED. Devices advertising bit 11 `AI_CLIENT_WORK_PHASE` accept `payload_len=7`,
 with `work_phase` at offset 6.
 
+| client_type | value | meaning |
+|---|---:|---|
+| CODEX | `0x01` | Codex |
+| CLAUDE_CODE | `0x02` | Claude Code |
+
+Any other `client_type` rejects the whole packet. The core accepts every known client type
+regardless of the advertised capabilities; bit 12 `AI_CLIENT_CLAUDE_CODE` advertises that the
+renderer can represent that client, it is not a decoder gate.
+
 | work_phase | value | meaning |
 |---|---:|---|
 | UNSPECIFIED | `0x00` | Detail unavailable; falls back to the legacy WORKING display |
@@ -687,6 +697,7 @@ Auto-generated from the existing Kconfig.
 | 9 | CONFIG_RPC | `RAWHID_APP_CONFIG_RPC` |
 | 10 | AI_CLIENT_STATE | both `RAWHID_APP_AI_CLIENT_STATE` and `RAWHID_APP_AI_CLIENT_STATE_RENDERER` |
 | 11 | AI_CLIENT_WORK_PHASE | same condition as bit 10; always advertised together with bit 10 |
+| 12 | AI_CLIENT_CLAUDE_CODE | bit 10's condition plus `RAWHID_APP_AI_CLIENT_CLAUDE_CODE_RENDERER`; never advertised alone |
 
 The host side can use this bit to skip sending packets to unsupported devices.
 

@@ -2,10 +2,11 @@
 
 #include <rawhid_app/packet.h>
 
+#include "ai_client_contract.h"
 #include "ai_client_state_model.h"
 
 static bool state_is_valid(const struct rawhid_app_ai_client_state *state) {
-    return state->client_type == RAWHID_APP_AI_CLIENT_CODEX &&
+    return rawhid_app_ai_client_type_is_known(state->client_type) &&
            state->activity_state <= RAWHID_APP_AI_ACTIVITY_ERROR &&
            state->work_phase <= RAWHID_APP_AI_WORK_PHASE_SEARCHING &&
            ((!state->session_active &&
