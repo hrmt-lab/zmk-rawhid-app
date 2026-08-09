@@ -96,14 +96,12 @@ Firmware Coreに変更は不要である。
 - `DEVICE_HELLO`のcapabilityが`0x3FF7`となり、bit 13を bit 10／11 と同時に広告すること。
 - Hostが8-byte payloadでslot 0とslot 1を送り分け、Coreがslot別に受理すること。
 - 2画面が同時に点灯し、slotごとに別の内容を描画できること。
+- 実際のAI sessionを2つ割り当てた状態でのslot別表示と非干渉。
+- slot別`cycle_ai_session`。
+- 複数キーボードへの同報。
+- SPI共有時の描画レートとLVGL 2画面分のRAM。
 
-次は**未実施**である。
-
-- 実データでのslot 0／slot 1の独立表示と非干渉（固定パターンでの確認のみ）
-- slot別`cycle_ai_session`
-- 複数キーボードへの同報
-- SPI共有時の描画レート
-- LVGL 2画面分のRAM実測
+この機能範囲に残作業はない。
 
 ホストCテストの実行方法と検証分担は
 [`ai-client-state-host-tests.md`](ai-client-state-host-tests.md)を参照する。
