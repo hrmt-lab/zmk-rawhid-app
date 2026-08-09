@@ -12,6 +12,7 @@ enum rawhid_app_ai_client_state_event_reason {
 
 struct rawhid_app_ai_client_state_changed {
     struct rawhid_app_ai_client_state state;
+    uint8_t display_slot;
     uint32_t state_generation;
     enum rawhid_app_ai_client_state_event_reason reason;
 };

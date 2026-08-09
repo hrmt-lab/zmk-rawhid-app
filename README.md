@@ -87,6 +87,8 @@ CONFIG_RAWHID_APP_CONFIG_RPC=y
 | `RAWHID_APP_AI_CLIENT_STATE` | `n` | AI Client State Core（検証・到着順LWW・15秒timeout） |
 | `RAWHID_APP_AI_CLIENT_STATE_RENDERER` | `n` | AI状態を利用するRendererが存在することを静的に宣言 |
 | `RAWHID_APP_AI_CLIENT_CLAUDE_CODE_RENDERER` | `n` | RendererがClaude Codeを独立clientとして表現できることを静的に宣言（bit 12） |
+| `RAWHID_APP_AI_CLIENT_DISPLAY_SLOT_RENDERER` | `n` | 論理表示slotごとに別Rendererを持つことを静的に宣言（bit 13） |
+| `RAWHID_APP_AI_CLIENT_DISPLAY_SLOT_COUNT` | `1` | Coreがstate／revision／timeoutを独立保持する論理表示slot数（`1..8`） |
 | `RAWHID_APP_LAYER_STATE_REPORT` | `n` | LAYER_STATE uplink（現在レイヤーと mask） |
 | `RAWHID_APP_BATTERY_REPORT` | `n` | BATTERY_STATUS uplink（Central/Self とペリフェラル残量） |
 | `RAWHID_APP_HOST_ACTION` | `n` | HOST_ACTION uplink（`&host_action <id> <value>`） |
@@ -446,6 +448,10 @@ DEVICE_HELLO は `payload_len=12`、payload に `capabilities u32 LE` と `devic
 bit 10のみのlegacy形式は`payload_len=6`で、`work_phase=UNSPECIFIED`として扱います。
 bit 11 `AI_CLIENT_WORK_PHASE`対応形式は`payload_len=7`で、offset 6へ
 `work_phase`を追加します。
+bit 13 `AI_CLIENT_DISPLAY_SLOT`対応形式は`payload_len=8`で、offset 7へ論理表示slot
+`display_slot`（`0..=7`）を追加します。6／7 byte形式は`display_slot=0`として扱い、
+`8`以上の`display_slot`と上記以外のPayload長はPacket全体をrejectします。
+詳細は[`docs/ai-client-display-slot.md`](docs/ai-client-display-slot.md)を参照してください。
 
 | client_type | 値 | 意味 |
 |---|---:|---|
@@ -468,6 +474,9 @@ UNSPECIFIEDへ正規化して診断logを残します。同じrevisionでもwork
 新しい状態eventとして受理し、全fieldが同じheartbeatではeventを発行しません。
 意味検証を通過した最後のPacketをrevisionの大小に関係なく受理し、15秒間正常な更新が
 なければ現在状態を無効化します。
+この状態保持・revision・15秒timeoutはすべて論理表示slot単位です。既定のslot数は`1`で、
+その場合の挙動とRAMは従来と同じです。`RAWHID_APP_AI_CLIENT_DISPLAY_SLOT_COUNT`より
+大きいslot宛の更新は、保持中のどのslotにも影響を与えずに破棄します。
 
 ### APP_LAYER (`0x30`)
 
@@ -660,6 +669,7 @@ FNV-1a 64bit でハッシュ化した値のみを送ります。hash 結果が 0
 | 10 | AI_CLIENT_STATE | `RAWHID_APP_AI_CLIENT_STATE` と `RAWHID_APP_AI_CLIENT_STATE_RENDERER`の両方 |
 | 11 | AI_CLIENT_WORK_PHASE | bit 10と同条件。必ずbit 10と同時に広告 |
 | 12 | AI_CLIENT_CLAUDE_CODE | bit 10の条件に加えて `RAWHID_APP_AI_CLIENT_CLAUDE_CODE_RENDERER`。単独では広告しない |
+| 13 | AI_CLIENT_DISPLAY_SLOT | bit 10／11の条件に加えて `RAWHID_APP_AI_CLIENT_DISPLAY_SLOT_RENDERER`。単独では広告せず、必ずbit 10とbit 11を伴う |
 
 Host 側はこのビットを見て、未対応デバイスへのパケット送信をスキップできます。
 

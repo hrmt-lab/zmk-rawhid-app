@@ -36,6 +36,12 @@
 #define RAWHID_APP_CAP_AI_CLIENT_STATE (1u << 10)
 #define RAWHID_APP_CAP_AI_CLIENT_WORK_PHASE (1u << 11)
 #define RAWHID_APP_CAP_AI_CLIENT_CLAUDE_CODE (1u << 12)
+#define RAWHID_APP_CAP_AI_CLIENT_DISPLAY_SLOT (1u << 13)
+
+/* Logical AI display slot selected by the host. It is not a screen ID, thread
+ * ID or session ID. Valid values are 0..7; slot 0 is the legacy single-screen
+ * destination used by 6 and 7 byte payloads. */
+#define RAWHID_APP_AI_CLIENT_DISPLAY_SLOT_MAX 7
 
 enum rawhid_app_packet_type {
     RAWHID_APP_PACKET_HOST_HELLO = 0x01,
@@ -175,6 +181,7 @@ struct rawhid_app_packet {
             uint8_t activity_state;
             uint16_t revision;
             uint8_t work_phase;
+            uint8_t display_slot;
         } ai_client_state;
         struct {
             uint8_t seq;

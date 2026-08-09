@@ -62,6 +62,29 @@ config RAWHID_APP_AI_CLIENT_CLAUDE_CODE_RENDERER
       CAP_AI_CLIENT_CLAUDE_CODE (bit 12) advertisement, which is never sent
       without CAP_AI_CLIENT_STATE.
 
+config RAWHID_APP_AI_CLIENT_DISPLAY_SLOT_RENDERER
+    bool "Declare a multi screen AI client state renderer"
+    depends on RAWHID_APP_AI_CLIENT_STATE_RENDERER
+    help
+      Enable this only when the target drives one physical renderer per logical
+      display slot, so that the host can address each screen separately. The AI
+      client state core always accepts the 8 byte payload; this option only
+      controls the CAP_AI_CLIENT_DISPLAY_SLOT (bit 13) advertisement, which is
+      never sent without CAP_AI_CLIENT_STATE and CAP_AI_CLIENT_WORK_PHASE.
+      Hosts send only slot 0, in the 6 or 7 byte form, to devices without it.
+
+config RAWHID_APP_AI_CLIENT_DISPLAY_SLOT_COUNT
+    int "Number of logical AI client display slots to retain"
+    depends on RAWHID_APP_AI_CLIENT_STATE
+    range 1 8
+    default 1
+    help
+      How many logical display slots the core keeps independent state, revision
+      and host timeout for. Set this to the number of physical AI client
+      renderers on the target. Updates addressed to a higher slot are dropped
+      without affecting any retained slot. The default of 1 matches the legacy
+      single screen behaviour and costs no extra RAM.
+
 config RAWHID_APP_BATTERY_REPORT
     bool "Enable RawHID BATTERY_STATUS uplink"
     depends on RAW_HID

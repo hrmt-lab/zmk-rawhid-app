@@ -35,6 +35,7 @@ LOG_MODULE_DECLARE(zmk, CONFIG_ZMK_LOG_LEVEL);
 #define RAWHID_APP_HELLO_DEVICE_UID_HASH 4 /* u64 LE */
 #define RAWHID_APP_AI_CLIENT_STATE_LEGACY_PAYLOAD_LEN 6
 #define RAWHID_APP_AI_CLIENT_STATE_WORK_PHASE_PAYLOAD_LEN 7
+#define RAWHID_APP_AI_CLIENT_STATE_DISPLAY_SLOT_PAYLOAD_LEN 8
 
 /* APP_LAYER payload offsets. */
 #define RAWHID_APP_APP_LAYER_PAYLOAD_LEN 2
@@ -284,8 +285,9 @@ static bool parse_ai_client_state_packet(const uint8_t *data, struct rawhid_app_
                                          uint8_t payload_len) {
     const uint8_t *payload = &data[RAWHID_APP_OFFSET_PAYLOAD];
     struct rawhid_app_ai_client_state state = {0};
+    uint8_t display_slot = 0;
     const enum rawhid_app_ai_client_decode_result result =
-        rawhid_app_ai_client_state_decode(payload, payload_len, &state);
+        rawhid_app_ai_client_state_decode(payload, payload_len, &state, &display_slot);
     if (result == RAWHID_APP_AI_CLIENT_DECODE_INVALID) {
         return false;
     }
@@ -299,6 +301,7 @@ static bool parse_ai_client_state_packet(const uint8_t *data, struct rawhid_app_
     packet->ai_client_state.activity_state = state.activity_state;
     packet->ai_client_state.revision = state.revision;
     packet->ai_client_state.work_phase = state.work_phase;
+    packet->ai_client_state.display_slot = display_slot;
     return true;
 }
 
@@ -445,7 +448,8 @@ static bool parse_packet(const struct raw_hid_received_event *event,
             data[RAWHID_APP_OFFSET_OP] != 0 ||
             data[RAWHID_APP_OFFSET_STATUS_OR_FLAGS] != 0 ||
             (payload_len != RAWHID_APP_AI_CLIENT_STATE_LEGACY_PAYLOAD_LEN &&
-             payload_len != RAWHID_APP_AI_CLIENT_STATE_WORK_PHASE_PAYLOAD_LEN)) {
+             payload_len != RAWHID_APP_AI_CLIENT_STATE_WORK_PHASE_PAYLOAD_LEN &&
+             payload_len != RAWHID_APP_AI_CLIENT_STATE_DISPLAY_SLOT_PAYLOAD_LEN)) {
             return false;
         }
         return parse_ai_client_state_packet(data, packet, payload_len);

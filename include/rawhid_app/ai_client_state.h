@@ -12,7 +12,13 @@ struct rawhid_app_ai_client_state {
     uint8_t work_phase;
 };
 
-/* Copies the current valid state. Returns false before the first valid update
- * and after the 15 second Host timeout. */
+/* Copies the current valid state of one logical display slot. Returns false
+ * before the first valid update for that slot, after its 15 second Host
+ * timeout, and for any slot this target does not have. */
+bool rawhid_app_ai_client_state_get_slot(uint8_t display_slot,
+                                         struct rawhid_app_ai_client_state *state,
+                                         uint32_t *state_generation);
+
+/* Slot 0 shorthand, kept for single-screen renderers. */
 bool rawhid_app_ai_client_state_get(struct rawhid_app_ai_client_state *state,
                                     uint32_t *state_generation);

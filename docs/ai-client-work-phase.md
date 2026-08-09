@@ -13,6 +13,9 @@ Host Link v2の`AI_CLIENT / STATE_UPDATE (0xA0)`で、既存の上位`activity_s
 - bit 12 `CAP_AI_CLIENT_CLAUDE_CODE`: `client_type = CLAUDE_CODE`をRendererが表現できる。
   `RAWHID_APP_AI_CLIENT_CLAUDE_CODE_RENDERER`が有効なときだけ、bit 10と同時に広告する。
   単独では広告しない。
+- bit 13 `CAP_AI_CLIENT_DISPLAY_SLOT`: 末尾`display_slot`付きの8 byte payloadを受信できる。
+  bit 10とbit 11も同時に広告する。詳細は
+  [`ai-client-display-slot.md`](ai-client-display-slot.md)を参照する。
 - Host Link version、packet type `0xA0`、feature `0x0A`、op／flags `0x00`は変更しない。
 
 | offset | size | field | bit 10のみ | bit 11対応 |
@@ -26,6 +29,7 @@ Host Link v2の`AI_CLIENT / STATE_UPDATE (0xA0)`で、既存の上位`activity_s
 
 - bit 10のみは`payload_len=6`で、decode時に`UNSPECIFIED`を補完する。
 - bit 11対応は`payload_len=7`とする。同じdeviceへ6 byteと7 byteを二重送信しない。
+- bit 13対応は`payload_len=8`で、offset 7に`display_slot`が付く。offset 0〜6の意味は変わらない。
 
 ## Client type
 
@@ -63,6 +67,9 @@ Targetでも、Coreは`CLAUDE_CODE`のstateを保持しeventを発行する。
   generationもevent数も増やさない。Renderer animationは再開始しない。
 - 15秒timeoutではstateを無効化し、公開eventのstateを全zero、work phaseを
   `UNSPECIFIED`へ戻す。
+- 上記のstate、revision、generation、timeoutはすべて論理表示slot単位である。
+  slot数の既定は1なので単一画面targetの挙動は変わらない。詳細は
+  [`ai-client-display-slot.md`](ai-client-display-slot.md)を参照する。
 
 ホストCテストの実行方法と検証分担は
 [`ai-client-state-host-tests.md`](ai-client-state-host-tests.md)を参照する。

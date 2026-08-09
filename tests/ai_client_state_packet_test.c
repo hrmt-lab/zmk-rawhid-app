@@ -6,17 +6,28 @@
 
 #include "ai_client_state_packet.h"
 
+/* Records the slot the decoder resolved so every existing case can also assert
+ * that legacy payloads keep landing on slot 0. */
+static uint8_t decoded_slot;
+
+static enum rawhid_app_ai_client_decode_result decode(const uint8_t *payload, uint8_t payload_len,
+                                                      struct rawhid_app_ai_client_state *state) {
+    decoded_slot = 0xff;
+    return rawhid_app_ai_client_state_decode(payload, payload_len, state, &decoded_slot);
+}
+
 static void test_legacy_payload_defaults_to_unspecified(void) {
     const uint8_t payload[] = {RAWHID_APP_AI_CLIENT_CODEX, 1, 1,
                                RAWHID_APP_AI_ACTIVITY_WORKING, 0x34, 0x12};
     struct rawhid_app_ai_client_state state = {0};
 
-    assert(rawhid_app_ai_client_state_decode(payload, sizeof(payload), &state) ==
+    assert(decode(payload, sizeof(payload), &state) ==
            RAWHID_APP_AI_CLIENT_DECODE_OK);
     assert(state.session_active);
     assert(state.activity_state == RAWHID_APP_AI_ACTIVITY_WORKING);
     assert(state.revision == 0x1234);
     assert(state.work_phase == RAWHID_APP_AI_WORK_PHASE_UNSPECIFIED);
+    assert(decoded_slot == 0);
 }
 
 static void test_detailed_payload_accepts_every_known_phase(void) {
@@ -27,9 +38,10 @@ static void test_detailed_payload_accepts_every_known_phase(void) {
          phase <= RAWHID_APP_AI_WORK_PHASE_SEARCHING; phase++) {
         struct rawhid_app_ai_client_state state = {0};
         payload[6] = phase;
-        assert(rawhid_app_ai_client_state_decode(payload, sizeof(payload), &state) ==
+        assert(decode(payload, sizeof(payload), &state) ==
                RAWHID_APP_AI_CLIENT_DECODE_OK);
         assert(state.work_phase == phase);
+        assert(decoded_slot == 0);
     }
 }
 
@@ -40,13 +52,13 @@ static void test_unknown_phase_is_normalized_without_losing_base_state(void) {
                                RAWHID_APP_AI_ACTIVITY_WAITING_INPUT, 10, 0, 0xfe};
     struct rawhid_app_ai_client_state state = {0};
 
-    assert(rawhid_app_ai_client_state_decode(working, sizeof(working), &state) ==
+    assert(decode(working, sizeof(working), &state) ==
            RAWHID_APP_AI_CLIENT_DECODE_NORMALIZED_WORK_PHASE);
     assert(state.activity_state == RAWHID_APP_AI_ACTIVITY_WORKING);
     assert(state.revision == 9);
     assert(state.work_phase == RAWHID_APP_AI_WORK_PHASE_UNSPECIFIED);
 
-    assert(rawhid_app_ai_client_state_decode(waiting, sizeof(waiting), &state) ==
+    assert(decode(waiting, sizeof(waiting), &state) ==
            RAWHID_APP_AI_CLIENT_DECODE_NORMALIZED_WORK_PHASE);
     assert(state.activity_state == RAWHID_APP_AI_ACTIVITY_WAITING_INPUT);
     assert(state.revision == 10);
@@ -59,26 +71,26 @@ static void test_rejects_invalid_lengths_and_combinations(void) {
                          RAWHID_APP_AI_WORK_PHASE_THINKING};
     struct rawhid_app_ai_client_state state = {0};
 
-    assert(rawhid_app_ai_client_state_decode(payload, 5, &state) ==
+    assert(decode(payload, 5, &state) ==
            RAWHID_APP_AI_CLIENT_DECODE_INVALID);
-    assert(rawhid_app_ai_client_state_decode(payload, 8, &state) ==
+    assert(decode(payload, 9, &state) ==
            RAWHID_APP_AI_CLIENT_DECODE_INVALID);
-    assert(rawhid_app_ai_client_state_decode(payload, sizeof(payload), &state) ==
+    assert(decode(payload, sizeof(payload), &state) ==
            RAWHID_APP_AI_CLIENT_DECODE_INVALID);
 
     payload[6] = RAWHID_APP_AI_WORK_PHASE_UNSPECIFIED;
     payload[2] = 2;
-    assert(rawhid_app_ai_client_state_decode(payload, sizeof(payload), &state) ==
+    assert(decode(payload, sizeof(payload), &state) ==
            RAWHID_APP_AI_CLIENT_DECODE_INVALID);
     payload[2] = 0;
-    assert(rawhid_app_ai_client_state_decode(payload, sizeof(payload), &state) ==
+    assert(decode(payload, sizeof(payload), &state) ==
            RAWHID_APP_AI_CLIENT_DECODE_INVALID);
     payload[2] = 1;
     payload[3] = RAWHID_APP_AI_ACTIVITY_NONE;
-    assert(rawhid_app_ai_client_state_decode(payload, sizeof(payload), &state) ==
+    assert(decode(payload, sizeof(payload), &state) ==
            RAWHID_APP_AI_CLIENT_DECODE_INVALID);
     payload[3] = 0xff;
-    assert(rawhid_app_ai_client_state_decode(payload, sizeof(payload), &state) ==
+    assert(decode(payload, sizeof(payload), &state) ==
            RAWHID_APP_AI_CLIENT_DECODE_INVALID);
 }
 
@@ -89,7 +101,7 @@ static void test_claude_code_client_type_decodes_like_codex(void) {
                           RAWHID_APP_AI_ACTIVITY_WORKING, 5, 0, 0};
     struct rawhid_app_ai_client_state state = {0};
 
-    assert(rawhid_app_ai_client_state_decode(legacy, sizeof(legacy), &state) ==
+    assert(decode(legacy, sizeof(legacy), &state) ==
            RAWHID_APP_AI_CLIENT_DECODE_OK);
     assert(state.client_type == RAWHID_APP_AI_CLIENT_CLAUDE_CODE);
     assert(state.activity_state == RAWHID_APP_AI_ACTIVITY_WAITING_APPROVAL);
@@ -99,14 +111,14 @@ static void test_claude_code_client_type_decodes_like_codex(void) {
     for (uint8_t phase = RAWHID_APP_AI_WORK_PHASE_UNSPECIFIED;
          phase <= RAWHID_APP_AI_WORK_PHASE_SEARCHING; phase++) {
         detailed[6] = phase;
-        assert(rawhid_app_ai_client_state_decode(detailed, sizeof(detailed), &state) ==
+        assert(decode(detailed, sizeof(detailed), &state) ==
                RAWHID_APP_AI_CLIENT_DECODE_OK);
         assert(state.client_type == RAWHID_APP_AI_CLIENT_CLAUDE_CODE);
         assert(state.work_phase == phase);
     }
 
     detailed[6] = 0x40;
-    assert(rawhid_app_ai_client_state_decode(detailed, sizeof(detailed), &state) ==
+    assert(decode(detailed, sizeof(detailed), &state) ==
            RAWHID_APP_AI_CLIENT_DECODE_NORMALIZED_WORK_PHASE);
     assert(state.client_type == RAWHID_APP_AI_CLIENT_CLAUDE_CODE);
     assert(state.activity_state == RAWHID_APP_AI_ACTIVITY_WORKING);
@@ -122,11 +134,83 @@ static void test_rejects_unknown_client_types(void) {
 
     for (size_t index = 0; index < sizeof(unknown_types); index++) {
         payload[0] = unknown_types[index];
-        assert(rawhid_app_ai_client_state_decode(payload, 6, &state) ==
+        assert(decode(payload, 6, &state) ==
                RAWHID_APP_AI_CLIENT_DECODE_INVALID);
-        assert(rawhid_app_ai_client_state_decode(payload, sizeof(payload), &state) ==
+        assert(decode(payload, sizeof(payload), &state) ==
                RAWHID_APP_AI_CLIENT_DECODE_INVALID);
     }
+}
+
+static void test_slot_payload_accepts_every_valid_slot(void) {
+    uint8_t payload[] = {RAWHID_APP_AI_CLIENT_CODEX,
+                         1,
+                         1,
+                         RAWHID_APP_AI_ACTIVITY_WORKING,
+                         0x21,
+                         0x43,
+                         RAWHID_APP_AI_WORK_PHASE_EXECUTING,
+                         0};
+
+    for (uint8_t slot = 0; slot <= RAWHID_APP_AI_CLIENT_DISPLAY_SLOT_MAX; slot++) {
+        struct rawhid_app_ai_client_state state = {0};
+        payload[7] = slot;
+        assert(decode(payload, sizeof(payload), &state) == RAWHID_APP_AI_CLIENT_DECODE_OK);
+        assert(decoded_slot == slot);
+        /* The first seven bytes keep their legacy meaning. */
+        assert(state.client_type == RAWHID_APP_AI_CLIENT_CODEX);
+        assert(state.session_active);
+        assert(state.activity_state == RAWHID_APP_AI_ACTIVITY_WORKING);
+        assert(state.revision == 0x4321);
+        assert(state.work_phase == RAWHID_APP_AI_WORK_PHASE_EXECUTING);
+    }
+}
+
+static void test_rejects_out_of_range_slots(void) {
+    const uint8_t out_of_range[] = {8, 9, 0x80, 0xff};
+    uint8_t payload[] = {RAWHID_APP_AI_CLIENT_CLAUDE_CODE,
+                         1,
+                         1,
+                         RAWHID_APP_AI_ACTIVITY_AVAILABLE,
+                         1,
+                         0,
+                         RAWHID_APP_AI_WORK_PHASE_UNSPECIFIED,
+                         0};
+
+    for (size_t index = 0; index < sizeof(out_of_range); index++) {
+        struct rawhid_app_ai_client_state state = {0};
+        payload[7] = out_of_range[index];
+        assert(decode(payload, sizeof(payload), &state) == RAWHID_APP_AI_CLIENT_DECODE_INVALID);
+    }
+}
+
+static void test_slot_payload_still_validates_the_legacy_fields(void) {
+    uint8_t payload[] = {RAWHID_APP_AI_CLIENT_CODEX,
+                         1,
+                         1,
+                         RAWHID_APP_AI_ACTIVITY_AVAILABLE,
+                         1,
+                         0,
+                         RAWHID_APP_AI_WORK_PHASE_THINKING,
+                         1};
+    struct rawhid_app_ai_client_state state = {0};
+
+    /* work phase outside WORKING is rejected whatever the slot says. */
+    assert(decode(payload, sizeof(payload), &state) == RAWHID_APP_AI_CLIENT_DECODE_INVALID);
+
+    /* An unknown work phase is still normalized rather than dropped, and the
+     * slot survives the normalization. */
+    payload[3] = RAWHID_APP_AI_ACTIVITY_WORKING;
+    payload[6] = 0x7f;
+    payload[7] = 3;
+    assert(decode(payload, sizeof(payload), &state) ==
+           RAWHID_APP_AI_CLIENT_DECODE_NORMALIZED_WORK_PHASE);
+    assert(state.work_phase == RAWHID_APP_AI_WORK_PHASE_UNSPECIFIED);
+    assert(decoded_slot == 3);
+
+    /* Unknown client types are rejected at 8 bytes too. */
+    payload[0] = 0x03;
+    payload[6] = RAWHID_APP_AI_WORK_PHASE_UNSPECIFIED;
+    assert(decode(payload, sizeof(payload), &state) == RAWHID_APP_AI_CLIENT_DECODE_INVALID);
 }
 
 int main(void) {
@@ -136,5 +220,8 @@ int main(void) {
     test_rejects_invalid_lengths_and_combinations();
     test_claude_code_client_type_decodes_like_codex();
     test_rejects_unknown_client_types();
+    test_slot_payload_accepts_every_valid_slot();
+    test_rejects_out_of_range_slots();
+    test_slot_payload_still_validates_the_legacy_fields();
     return 0;
 }

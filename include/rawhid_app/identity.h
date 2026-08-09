@@ -20,5 +20,8 @@ uint64_t rawhid_app_identity_get_uid_hash(void);
  *   bit 9 — CONFIG_RAWHID_APP_CONFIG_RPC
  *   bit 10 — CONFIG_RAWHID_APP_AI_CLIENT_STATE and
  *            CONFIG_RAWHID_APP_AI_CLIENT_STATE_RENDERER
- *   bit 11 — AI client work phase; always advertised with bit 10 */
+ *   bit 11 — AI client work phase; always advertised with bit 10
+ *   bit 12 — CONFIG_RAWHID_APP_AI_CLIENT_CLAUDE_CODE_RENDERER; never alone
+ *   bit 13 — CONFIG_RAWHID_APP_AI_CLIENT_DISPLAY_SLOT_RENDERER; never alone,
+ *            always advertised together with bits 10 and 11 */
 uint32_t rawhid_app_identity_get_capabilities(void);

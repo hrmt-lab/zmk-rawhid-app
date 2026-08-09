@@ -91,6 +91,8 @@ enables `RAWHID_APP` itself.
 | `RAWHID_APP_AI_CLIENT_STATE` | `n` | AI Client State Core (validation, arrival-order LWW, 15-second timeout) |
 | `RAWHID_APP_AI_CLIENT_STATE_RENDERER` | `n` | Statically declares that an AI state renderer is present |
 | `RAWHID_APP_AI_CLIENT_CLAUDE_CODE_RENDERER` | `n` | Statically declares that the renderer can represent Claude Code as a distinct client (bit 12) |
+| `RAWHID_APP_AI_CLIENT_DISPLAY_SLOT_RENDERER` | `n` | Statically declares one renderer per logical display slot (bit 13) |
+| `RAWHID_APP_AI_CLIENT_DISPLAY_SLOT_COUNT` | `1` | Logical display slots the core keeps independent state, revision and timeout for (`1..8`) |
 | `RAWHID_APP_LAYER_STATE_REPORT` | `n` | LAYER_STATE uplink (current layer and mask) |
 | `RAWHID_APP_BATTERY_REPORT` | `n` | BATTERY_STATUS uplink (Central/Self and peripheral levels) |
 | `RAWHID_APP_HOST_ACTION` | `n` | HOST_ACTION uplink (`&host_action <id> <value>`) |
@@ -474,7 +476,10 @@ Uses `feature=0x0A`, `op=0`, and `flags=0`. The first six payload bytes contain
 `client_type`, `client_variant`, `session_active`, `activity_state`, and `revision u16 LE`.
 The legacy format for bit 10-only devices uses `payload_len=6` and defaults `work_phase`
 to UNSPECIFIED. Devices advertising bit 11 `AI_CLIENT_WORK_PHASE` accept `payload_len=7`,
-with `work_phase` at offset 6.
+with `work_phase` at offset 6. Devices advertising bit 13 `AI_CLIENT_DISPLAY_SLOT` accept
+`payload_len=8`, with the logical `display_slot` (`0..=7`) at offset 7. The 6 and 7 byte
+forms resolve to slot 0; a `display_slot` above 7 and any other payload length reject the
+whole packet. See [`docs/ai-client-display-slot.md`](docs/ai-client-display-slot.md).
 
 | client_type | value | meaning |
 |---|---:|---|
@@ -497,6 +502,10 @@ without dropping the base state and produce a diagnostic log. A work-phase-only 
 with the same revision publishes a new state event, while an identical heartbeat does not.
 The last semantically valid packet wins regardless of revision ordering. The current state
 expires after 15 seconds without another valid update.
+State retention, revision and the 15 second timeout are all per logical display slot. The
+default slot count is `1`, which behaves and costs exactly as before. Updates addressed to a
+slot beyond `RAWHID_APP_AI_CLIENT_DISPLAY_SLOT_COUNT` are dropped without disturbing any
+retained slot.
 
 ### APP_LAYER (`0x30`)
 
@@ -698,6 +707,7 @@ Auto-generated from the existing Kconfig.
 | 10 | AI_CLIENT_STATE | both `RAWHID_APP_AI_CLIENT_STATE` and `RAWHID_APP_AI_CLIENT_STATE_RENDERER` |
 | 11 | AI_CLIENT_WORK_PHASE | same condition as bit 10; always advertised together with bit 10 |
 | 12 | AI_CLIENT_CLAUDE_CODE | bit 10's condition plus `RAWHID_APP_AI_CLIENT_CLAUDE_CODE_RENDERER`; never advertised alone |
+| 13 | AI_CLIENT_DISPLAY_SLOT | bit 10 and 11's conditions plus `RAWHID_APP_AI_CLIENT_DISPLAY_SLOT_RENDERER`; never advertised alone, and always together with bits 10 and 11 |
 
 The host side can use this bit to skip sending packets to unsupported devices.
 

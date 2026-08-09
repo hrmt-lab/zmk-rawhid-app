@@ -14,6 +14,10 @@ enum rawhid_app_ai_client_state_event_reason {
 
 struct rawhid_app_ai_client_state_changed {
     struct rawhid_app_ai_client_state state;
+    /* Logical display slot this state belongs to. Renderers that drive a single
+     * screen only act on slot 0; multi-screen renderers map slot n to their
+     * physical screen n and ignore slots they have no screen for. */
+    uint8_t display_slot;
     uint32_t state_generation;
     enum rawhid_app_ai_client_state_event_reason reason;
 };
