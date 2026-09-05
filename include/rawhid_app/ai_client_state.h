@@ -10,6 +10,7 @@ struct rawhid_app_ai_client_state {
     uint8_t activity_state;
     uint16_t revision;
     uint8_t work_phase;
+    uint8_t screenkey_state;
 };
 
 /* Copies the current valid state of one logical display slot. Returns false

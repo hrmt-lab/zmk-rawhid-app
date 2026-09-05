@@ -36,6 +36,7 @@ LOG_MODULE_DECLARE(zmk, CONFIG_ZMK_LOG_LEVEL);
 #define RAWHID_APP_AI_CLIENT_STATE_LEGACY_PAYLOAD_LEN 6
 #define RAWHID_APP_AI_CLIENT_STATE_WORK_PHASE_PAYLOAD_LEN 7
 #define RAWHID_APP_AI_CLIENT_STATE_DISPLAY_SLOT_PAYLOAD_LEN 8
+#define RAWHID_APP_AI_CLIENT_STATE_SCREENKEY_STATE_PAYLOAD_LEN 9
 
 /* APP_LAYER payload offsets. */
 #define RAWHID_APP_APP_LAYER_PAYLOAD_LEN 2
@@ -302,6 +303,7 @@ static bool parse_ai_client_state_packet(const uint8_t *data, struct rawhid_app_
     packet->ai_client_state.revision = state.revision;
     packet->ai_client_state.work_phase = state.work_phase;
     packet->ai_client_state.display_slot = display_slot;
+    packet->ai_client_state.screenkey_state = state.screenkey_state;
     return true;
 }
 
@@ -449,7 +451,8 @@ static bool parse_packet(const struct raw_hid_received_event *event,
             data[RAWHID_APP_OFFSET_STATUS_OR_FLAGS] != 0 ||
             (payload_len != RAWHID_APP_AI_CLIENT_STATE_LEGACY_PAYLOAD_LEN &&
              payload_len != RAWHID_APP_AI_CLIENT_STATE_WORK_PHASE_PAYLOAD_LEN &&
-             payload_len != RAWHID_APP_AI_CLIENT_STATE_DISPLAY_SLOT_PAYLOAD_LEN)) {
+             payload_len != RAWHID_APP_AI_CLIENT_STATE_DISPLAY_SLOT_PAYLOAD_LEN &&
+             payload_len != RAWHID_APP_AI_CLIENT_STATE_SCREENKEY_STATE_PAYLOAD_LEN)) {
             return false;
         }
         return parse_ai_client_state_packet(data, packet, payload_len);

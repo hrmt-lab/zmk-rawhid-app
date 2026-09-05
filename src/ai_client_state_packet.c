@@ -10,6 +10,7 @@
 #define AI_CLIENT_STATE_LEGACY_PAYLOAD_LEN 6
 #define AI_CLIENT_STATE_WORK_PHASE_PAYLOAD_LEN 7
 #define AI_CLIENT_STATE_DISPLAY_SLOT_PAYLOAD_LEN 8
+#define AI_CLIENT_STATE_SCREENKEY_STATE_PAYLOAD_LEN 9
 
 enum rawhid_app_ai_client_decode_result
 rawhid_app_ai_client_state_decode(const uint8_t *payload, uint8_t payload_len,
@@ -18,7 +19,8 @@ rawhid_app_ai_client_state_decode(const uint8_t *payload, uint8_t payload_len,
     if (payload == NULL || state == NULL || display_slot == NULL ||
         (payload_len != AI_CLIENT_STATE_LEGACY_PAYLOAD_LEN &&
          payload_len != AI_CLIENT_STATE_WORK_PHASE_PAYLOAD_LEN &&
-         payload_len != AI_CLIENT_STATE_DISPLAY_SLOT_PAYLOAD_LEN)) {
+         payload_len != AI_CLIENT_STATE_DISPLAY_SLOT_PAYLOAD_LEN &&
+         payload_len != AI_CLIENT_STATE_SCREENKEY_STATE_PAYLOAD_LEN)) {
         return RAWHID_APP_AI_CLIENT_DECODE_INVALID;
     }
 
@@ -33,17 +35,21 @@ rawhid_app_ai_client_state_decode(const uint8_t *payload, uint8_t payload_len,
                             ? payload[6]
                             : RAWHID_APP_AI_WORK_PHASE_UNSPECIFIED;
 
-    if (payload_len == AI_CLIENT_STATE_DISPLAY_SLOT_PAYLOAD_LEN) {
+    if (payload_len >= AI_CLIENT_STATE_DISPLAY_SLOT_PAYLOAD_LEN) {
         if (payload[7] > RAWHID_APP_AI_CLIENT_DISPLAY_SLOT_MAX) {
             return RAWHID_APP_AI_CLIENT_DECODE_INVALID;
         }
         *display_slot = payload[7];
     }
+    state->screenkey_state = payload_len == AI_CLIENT_STATE_SCREENKEY_STATE_PAYLOAD_LEN
+                                 ? payload[8]
+                                 : RAWHID_APP_AI_CLIENT_SCREENKEY_STATE_NORMAL;
 
     if (payload[2] > 1 || !rawhid_app_ai_client_type_is_known(state->client_type) ||
         state->activity_state > RAWHID_APP_AI_ACTIVITY_ERROR ||
         (!state->session_active && state->activity_state != RAWHID_APP_AI_ACTIVITY_NONE) ||
-        (state->session_active && state->activity_state == RAWHID_APP_AI_ACTIVITY_NONE)) {
+        (state->session_active && state->activity_state == RAWHID_APP_AI_ACTIVITY_NONE) ||
+        state->screenkey_state > RAWHID_APP_AI_CLIENT_SCREENKEY_STATE_SENT) {
         return RAWHID_APP_AI_CLIENT_DECODE_INVALID;
     }
 

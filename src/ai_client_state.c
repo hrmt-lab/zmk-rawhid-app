@@ -116,6 +116,7 @@ void rawhid_app_ai_client_state_handle(const struct rawhid_app_packet *packet) {
     const uint8_t activity_state = packet->ai_client_state.activity_state;
     const uint8_t work_phase = packet->ai_client_state.work_phase;
     const uint8_t display_slot = packet->ai_client_state.display_slot;
+    const uint8_t screenkey_state = packet->ai_client_state.screenkey_state;
 
     if (session_active > 1) {
         LOG_WRN("dropping invalid AI client state");
@@ -139,6 +140,7 @@ void rawhid_app_ai_client_state_handle(const struct rawhid_app_packet *packet) {
         .activity_state = activity_state,
         .revision = packet->ai_client_state.revision,
         .work_phase = work_phase,
+        .screenkey_state = screenkey_state,
     };
 
     struct ai_client_slot *slot = &slots[display_slot];
@@ -162,10 +164,10 @@ void rawhid_app_ai_client_state_handle(const struct rawhid_app_packet *packet) {
         result == RAWHID_APP_AI_CLIENT_UPDATED_SAME_REVISION) {
         generation = slot->model.generation;
         state_changed = true;
-        LOG_INF("AI client state accepted: slot=%u active=%u activity=%u phase=%u revision=%u "
-                "generation=%u",
+        LOG_INF("AI client state accepted: slot=%u active=%u activity=%u phase=%u screenkey=%u "
+                "revision=%u generation=%u",
                 display_slot, next.session_active, next.activity_state, next.work_phase,
-                next.revision, slot->model.generation);
+                next.screenkey_state, next.revision, slot->model.generation);
     } else {
         LOG_DBG("AI client state heartbeat: slot=%u revision=%u", display_slot, next.revision);
     }

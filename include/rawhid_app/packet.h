@@ -37,6 +37,7 @@
 #define RAWHID_APP_CAP_AI_CLIENT_WORK_PHASE (1u << 11)
 #define RAWHID_APP_CAP_AI_CLIENT_CLAUDE_CODE (1u << 12)
 #define RAWHID_APP_CAP_AI_CLIENT_DISPLAY_SLOT (1u << 13)
+#define RAWHID_APP_CAP_AI_CLIENT_SCREENKEY_STATE (1u << 14)
 
 /* Logical AI display slot selected by the host. It is not a screen ID, thread
  * ID or session ID. Valid values are 0..7; slot 0 is the legacy single-screen
@@ -82,6 +83,15 @@ enum rawhid_app_ai_work_phase {
     RAWHID_APP_AI_WORK_PHASE_THINKING = 0x01,
     RAWHID_APP_AI_WORK_PHASE_EXECUTING = 0x02,
     RAWHID_APP_AI_WORK_PHASE_SEARCHING = 0x03,
+};
+
+/* Optional ninth byte of AI_CLIENT_STATE. It is deliberately a display-only
+ * vocabulary: the first eight bytes retain their wire meanings. */
+enum rawhid_app_ai_client_screenkey_state {
+    RAWHID_APP_AI_CLIENT_SCREENKEY_STATE_NORMAL = 0,
+    RAWHID_APP_AI_CLIENT_SCREENKEY_STATE_HUD_TARGET = 1,
+    RAWHID_APP_AI_CLIENT_SCREENKEY_STATE_HUD_OTHER = 2,
+    RAWHID_APP_AI_CLIENT_SCREENKEY_STATE_SENT = 3,
 };
 
 enum rawhid_app_app_layer_action {
@@ -182,6 +192,7 @@ struct rawhid_app_packet {
             uint16_t revision;
             uint8_t work_phase;
             uint8_t display_slot;
+            uint8_t screenkey_state;
         } ai_client_state;
         struct {
             uint8_t seq;

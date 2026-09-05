@@ -9,6 +9,7 @@ static bool state_is_valid(const struct rawhid_app_ai_client_state *state) {
     return rawhid_app_ai_client_type_is_known(state->client_type) &&
            state->activity_state <= RAWHID_APP_AI_ACTIVITY_ERROR &&
            state->work_phase <= RAWHID_APP_AI_WORK_PHASE_SEARCHING &&
+           state->screenkey_state <= RAWHID_APP_AI_CLIENT_SCREENKEY_STATE_SENT &&
            ((!state->session_active &&
              state->activity_state == RAWHID_APP_AI_ACTIVITY_NONE &&
              state->work_phase == RAWHID_APP_AI_WORK_PHASE_UNSPECIFIED) ||
@@ -24,7 +25,8 @@ static bool state_equals(const struct rawhid_app_ai_client_state *left,
            left->client_variant == right->client_variant &&
            left->session_active == right->session_active &&
            left->activity_state == right->activity_state && left->revision == right->revision &&
-           left->work_phase == right->work_phase;
+           left->work_phase == right->work_phase &&
+           left->screenkey_state == right->screenkey_state;
 }
 
 static bool base_state_equals(const struct rawhid_app_ai_client_state *left,

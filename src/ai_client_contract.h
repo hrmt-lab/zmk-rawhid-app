@@ -28,13 +28,15 @@ static inline bool rawhid_app_ai_client_type_is_known(uint8_t client_type) {
 /* AI client capability bits for DEVICE_HELLO.
  *
  * bit 10 / bit 11 need the Core plus a declared renderer. bit 12 additionally
- * needs a renderer that can represent Claude Code, and bit 13 a renderer that
- * drives one physical screen per logical display slot. Neither is ever
+ * needs a renderer that can represent Claude Code, bit 13 a renderer that
+ * drives one physical screen per logical display slot, and bit 14 a renderer
+ * that understands the ninth ScreenKey display-state byte. Neither is ever
  * advertised on its own. */
 static inline uint32_t
 rawhid_app_ai_client_capability_bits(bool core_enabled, bool renderer_enabled,
                                      bool claude_code_renderer_enabled,
-                                     bool display_slot_renderer_enabled) {
+                                     bool display_slot_renderer_enabled,
+                                     bool screenkey_state_renderer_enabled) {
     if (!core_enabled || !renderer_enabled) {
         return 0;
     }
@@ -45,6 +47,9 @@ rawhid_app_ai_client_capability_bits(bool core_enabled, bool renderer_enabled,
     }
     if (display_slot_renderer_enabled) {
         caps |= RAWHID_APP_CAP_AI_CLIENT_DISPLAY_SLOT;
+    }
+    if (display_slot_renderer_enabled && screenkey_state_renderer_enabled) {
+        caps |= RAWHID_APP_CAP_AI_CLIENT_SCREENKEY_STATE;
     }
 
     return caps;

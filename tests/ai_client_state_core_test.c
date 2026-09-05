@@ -18,6 +18,8 @@ int raise_rawhid_app_ai_client_state_changed(
 #include "../../src/ai_client_state_model.c"
 #include "../../src/ai_client_state.c"
 
+static void reset_fixture(void);
+
 static struct rawhid_app_packet packet_for_slot(uint8_t display_slot, uint8_t client_type,
                                                 uint8_t activity, bool session_active,
                                                 uint16_t revision, uint8_t work_phase) {
@@ -47,6 +49,23 @@ static struct rawhid_app_packet packet_for(uint8_t activity, bool session_active
                                            uint16_t revision, uint8_t work_phase) {
     return packet_for_client(RAWHID_APP_AI_CLIENT_CODEX, activity, session_active, revision,
                              work_phase);
+}
+
+static void test_screenkey_state_change_is_published(void) {
+    struct rawhid_app_ai_client_state state = {0};
+    struct rawhid_app_packet waiting =
+        packet_for(RAWHID_APP_AI_ACTIVITY_WAITING_APPROVAL, true, 30,
+                   RAWHID_APP_AI_WORK_PHASE_UNSPECIFIED);
+    struct rawhid_app_packet sent = waiting;
+    sent.ai_client_state.screenkey_state = RAWHID_APP_AI_CLIENT_SCREENKEY_STATE_SENT;
+
+    reset_fixture();
+    rawhid_app_ai_client_state_handle(&waiting);
+    rawhid_app_ai_client_state_handle(&sent);
+    assert(rawhid_app_ai_client_state_get(&state, NULL));
+    assert(state.screenkey_state == RAWHID_APP_AI_CLIENT_SCREENKEY_STATE_SENT);
+    assert(event_count == 2);
+    assert(last_event.state.screenkey_state == RAWHID_APP_AI_CLIENT_SCREENKEY_STATE_SENT);
 }
 
 static void reset_fixture(void) {
@@ -416,6 +435,7 @@ int main(void) {
     test_update_heartbeat_and_timeout();
     test_same_revision_payload_change_is_published();
     test_same_revision_work_phase_change_is_published_once();
+    test_screenkey_state_change_is_published();
     test_session_end_is_accepted_then_heartbeats_and_restarts();
     test_claude_code_client_type_is_published_and_dropped_when_unknown();
     test_legacy_payloads_land_on_slot_zero();

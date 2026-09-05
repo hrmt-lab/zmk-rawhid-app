@@ -27,6 +27,7 @@ static void test_legacy_payload_defaults_to_unspecified(void) {
     assert(state.activity_state == RAWHID_APP_AI_ACTIVITY_WORKING);
     assert(state.revision == 0x1234);
     assert(state.work_phase == RAWHID_APP_AI_WORK_PHASE_UNSPECIFIED);
+    assert(state.screenkey_state == RAWHID_APP_AI_CLIENT_SCREENKEY_STATE_NORMAL);
     assert(decoded_slot == 0);
 }
 
@@ -141,6 +142,34 @@ static void test_rejects_unknown_client_types(void) {
     }
 }
 
+static void test_screenkey_state_payload_keeps_the_first_eight_bytes(void) {
+    uint8_t payload[] = {RAWHID_APP_AI_CLIENT_CODEX,
+                         1,
+                         1,
+                         RAWHID_APP_AI_ACTIVITY_WAITING_APPROVAL,
+                         0x21,
+                         0x43,
+                         RAWHID_APP_AI_WORK_PHASE_UNSPECIFIED,
+                         3,
+                         0};
+
+    for (uint8_t screenkey_state = RAWHID_APP_AI_CLIENT_SCREENKEY_STATE_NORMAL;
+         screenkey_state <= RAWHID_APP_AI_CLIENT_SCREENKEY_STATE_SENT; screenkey_state++) {
+        struct rawhid_app_ai_client_state state = {0};
+        payload[8] = screenkey_state;
+        assert(decode(payload, sizeof(payload), &state) == RAWHID_APP_AI_CLIENT_DECODE_OK);
+        assert(decoded_slot == 3);
+        assert(state.client_type == RAWHID_APP_AI_CLIENT_CODEX);
+        assert(state.revision == 0x4321);
+        assert(state.work_phase == RAWHID_APP_AI_WORK_PHASE_UNSPECIFIED);
+        assert(state.screenkey_state == screenkey_state);
+    }
+
+    payload[8] = 4;
+    struct rawhid_app_ai_client_state invalid = {0};
+    assert(decode(payload, sizeof(payload), &invalid) == RAWHID_APP_AI_CLIENT_DECODE_INVALID);
+}
+
 static void test_slot_payload_accepts_every_valid_slot(void) {
     uint8_t payload[] = {RAWHID_APP_AI_CLIENT_CODEX,
                          1,
@@ -220,6 +249,7 @@ int main(void) {
     test_rejects_invalid_lengths_and_combinations();
     test_claude_code_client_type_decodes_like_codex();
     test_rejects_unknown_client_types();
+    test_screenkey_state_payload_keeps_the_first_eight_bytes();
     test_slot_payload_accepts_every_valid_slot();
     test_rejects_out_of_range_slots();
     test_slot_payload_still_validates_the_legacy_fields();

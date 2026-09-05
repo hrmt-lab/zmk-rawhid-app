@@ -73,6 +73,16 @@ config RAWHID_APP_AI_CLIENT_DISPLAY_SLOT_RENDERER
       never sent without CAP_AI_CLIENT_STATE and CAP_AI_CLIENT_WORK_PHASE.
       Hosts send only slot 0, in the 6 or 7 byte form, to devices without it.
 
+config RAWHID_APP_AI_CLIENT_SCREENKEY_STATE_RENDERER
+    bool "Declare ScreenKey AI client display-state support"
+    depends on RAWHID_APP_AI_CLIENT_DISPLAY_SLOT_RENDERER
+    help
+      Enable this only when the target renders the ninth AI_CLIENT_STATE byte
+      as ScreenKey state. This controls the CAP_AI_CLIENT_SCREENKEY_STATE
+      (bit 14) advertisement; it is never sent without the AI client state,
+      work phase, and display slot capabilities. Hosts keep sending the legacy
+      8 byte form to targets without this declaration.
+
 config RAWHID_APP_AI_CLIENT_DISPLAY_SLOT_COUNT
     int "Number of logical AI client display slots to retain"
     depends on RAWHID_APP_AI_CLIENT_STATE
